@@ -1,0 +1,96 @@
+openapi: 3.1.0
+info:
+  title: DSE ERP v9.0.92 Mobile Compatibility Contract
+  version: 1.2.2-v9.0.92-premium-ui
+  description: >-
+    DSE ERP Mobile 1.2.2 consumes the existing v9.0.92 server API directly.
+    Business state, permissions, numbering, payments, returns/refunds, inventory,
+    reconciliation and masters remain server-owned. The reserved /api/mobile/v1
+    delta-sync and standalone shipping endpoints are intentionally not advertised
+    because they are not implemented by the v9.0.92 server.
+servers:
+  - url: https://erp.example.invalid
+paths:
+  /api/runtime/health:
+    get:
+      summary: Verify the DSE ERP server/runtime contract before login
+      responses:
+        '200':
+          description: Runtime readiness and version/API/build contract
+  /api/auth/login:
+    post:
+      summary: Authenticate against the existing ERP server
+      responses:
+        '200': { description: Login or MFA challenge }
+  /api/auth/registration/captcha:
+    get:
+      summary: Issue the v9.0.92 registration CAPTCHA challenge
+      responses:
+        '200': { description: CAPTCHA challenge }
+  /api/auth/registration/request:
+    post:
+      summary: Request registration email verification after CAPTCHA validation
+      responses:
+        '200': { description: Email verification challenge }
+  /api/auth/registration/email/verify:
+    post:
+      summary: Verify email and return authenticator enrollment details
+      responses:
+        '200': { description: MFA setup details }
+  /api/auth/registration/mfa/complete:
+    post:
+      summary: Verify authenticator code and submit registration for admin approval
+      responses:
+        '200': { description: Registration pending approval }
+  /api/auth/session/extend:
+    post:
+      summary: Extend the current authenticated session and rotate the access token
+      responses:
+        '200': { description: Extended session token }
+  /api/operations/sales/page:
+    get:
+      summary: Sales Register page using v9.0.92 filters and paging
+      responses:
+        '200': { description: Sales page }
+  /api/operations/purchases/page:
+    get:
+      summary: Purchase Register page using v9.0.92 filters and paging
+      responses:
+        '200': { description: Purchase page }
+  /api/support/payments/with-id:
+    post:
+      summary: Record an auditable Sales or Purchase payment
+      responses:
+        '200': { description: Payment created }
+  /api/returns/page:
+    get:
+      summary: Sales/Purchase Return register with server-owned lifecycle filters
+      responses:
+        '200': { description: Return page }
+  /api/returns/{returnNo}/refunds:
+    post:
+      summary: Record a refund through the auditable refund ledger
+      parameters:
+        - in: path
+          name: returnNo
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Refund recorded }
+  /api/reconciliation/bank/imports/page:
+    get:
+      summary: Bank statement batches for reconciliation
+      responses:
+        '200': { description: Reconciliation batch page }
+  /api/insights/dashboard:
+    get:
+      summary: Server-owned dashboard metrics
+      responses:
+        '200': { description: Dashboard metrics }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+security:
+  - bearerAuth: []
