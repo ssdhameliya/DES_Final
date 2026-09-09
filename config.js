@@ -1,7 +1,7 @@
 window.JASVI_PWA_CONFIG = Object.freeze({
   appName: 'Jasvi Industries',
   environment: 'UAT',
-  version: '1.0.0-uat.2',
+  version: '1.0.1-uat.3',
   apiBaseUrl: 'https://api-uat.jasviindustries.in',
   publicUrl: 'https://mobile-uat.jasviindustries.in',
   prodPublicUrl: 'https://mobile.jasviindustries.in',
