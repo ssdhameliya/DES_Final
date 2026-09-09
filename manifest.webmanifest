@@ -1,0 +1,41 @@
+{
+  "name": "Jasvi Industries ERP",
+  "short_name": "Jasvi ERP",
+  "description": "Jasvi Industries ERP mobile workspace",
+  "id": "./",
+  "start_url": "./?source=pwa",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": [
+    "standalone",
+    "minimal-ui"
+  ],
+  "background_color": "#f7f7fb",
+  "theme_color": "#6d35f4",
+  "orientation": "portrait-primary",
+  "categories": [
+    "business",
+    "productivity",
+    "finance"
+  ],
+  "icons": [
+    {
+      "src": "icons/icon-192.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}
