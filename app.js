@@ -1,301 +1,398 @@
 (()=>{
 'use strict';
+
 const C=window.JASVI_PWA_CONFIG;
 const root=document.getElementById('root');
-const state={token:sessionStorage.getItem('jasvi.token')||localStorage.getItem('jasvi.token')||'',remember:!!localStorage.getItem('jasvi.token'),user:null,permissions:[],tab:'dashboard',loading:false,online:navigator.onLine,installHint:false,refreshKey:0,sales:{page:0,q:'',status:'',rows:[],metrics:null,totalRows:0},bank:{batches:[],batch:null,transactions:[],metrics:null,q:'',status:''},dashboard:null,importTab:'history',lastError:''};
-const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
-const rupee=n=>new Intl.NumberFormat('en-IN',{style:'currency',currency:'INR',maximumFractionDigits:0}).format(Number(n||0));
-const shortMoney=n=>{n=Number(n||0);if(Math.abs(n)>=1e7)return '₹'+(n/1e7).toFixed(2)+'Cr';if(Math.abs(n)>=1e5)return '₹'+(n/1e5).toFixed(2)+'L';if(Math.abs(n)>=1e3)return '₹'+(n/1e3).toFixed(1)+'K';return rupee(n)};
+const TOKEN_KEY='jasvi.pwa.token';
+const SESSION_KEY='jasvi.pwa.session.token';
+const state={
+  token:sessionStorage.getItem(SESSION_KEY)||localStorage.getItem(TOKEN_KEY)||'',
+  remember:!!localStorage.getItem(TOKEN_KEY),
+  user:null,permissions:[],online:navigator.onLine,pending:0,
+  route:{main:'dashboard',sub:null}, drawer:false, loading:false,
+  dashboard:null,sales:null,purchases:null,quotes:null,returns:{SALES:null,PURCHASE:null},
+  bank:{mode:'statement',batches:null,batch:null,transactions:null,finance:null,metrics:null},
+  more:{}, searchOpen:false
+};
+
+const esc=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
+const qsel=s=>document.querySelector(s); const qsa=s=>[...document.querySelectorAll(s)];
+const rupee=n=>new Intl.NumberFormat('en-IN',{style:'currency',currency:'INR',maximumFractionDigits:2}).format(Number(n||0));
+const compact=n=>new Intl.NumberFormat('en-IN',{notation:'compact',maximumFractionDigits:1}).format(Number(n||0));
+const today=()=>new Date().toISOString().slice(0,10);
+const thirtyDaysAgo=()=>{const d=new Date();d.setDate(d.getDate()-30);return d.toISOString().slice(0,10)};
 const dateOnly=v=>String(v||'').slice(0,10);
-const badgeClass=s=>{s=String(s||'').toUpperCase();if(/PAID|MATCHED|COMPLETED|APPROVED|ACTIVE|SUCCESS|RECONCILED/.test(s))return'green';if(/PENDING|OPEN|REVIEW|PROCESS|DUE/.test(s))return'orange';if(/FAIL|REJECT|CANCEL|OVERDUE|ERROR/.test(s))return'red';if(/PARTIAL|SUGGEST/.test(s))return'blue';return'purple'};
-function svg(name){const p={home:'<path d="M3 11.5 12 4l9 7.5v8.5a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',sales:'<path d="M6 2h9l3 3v17H6z"/><path d="M9 9h6M9 13h6M9 17h4"/>',bank:'<path d="M3 9h18M5 9v9m4-9v9m6-9v9m4-9v9M3 20h18M12 3l9 4H3z"/>',upload:'<path d="M12 16V4m0 0-4 4m4-4 4 4M4 15v5h16v-5"/>',more:'<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',search:'<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>',refresh:'<path d="M20 6v5h-5M4 18v-5h5"/><path d="M18 9a7 7 0 0 0-12-2L4 11m2 4a7 7 0 0 0 12 2l2-4"/>',menu:'<path d="M4 7h16M4 12h16M4 17h16"/>'};return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p[name]||p.more}</svg>`}
-function tokenStore(token,remember){state.token=token||'';sessionStorage.removeItem('jasvi.token');localStorage.removeItem('jasvi.token');if(token)(remember?localStorage:sessionStorage).setItem('jasvi.token',token)}
-async function api(path,{method='GET',body,auth=true,timeout=C.requestTimeoutMs,headers={}}={}){const ctl=new AbortController();const timer=setTimeout(()=>ctl.abort(),timeout);try{const h={'Accept':'application/json',...headers};if(body!==undefined)h['Content-Type']='application/json';if(auth&&state.token)h['Authorization']='Bearer '+state.token;const r=await fetch(C.apiBaseUrl+path,{method,headers:h,body:body===undefined?undefined:JSON.stringify(body),signal:ctl.signal,mode:'cors',credentials:'omit'});const text=await r.text();let data=null;try{data=text?JSON.parse(text):null}catch{data=text}if(r.status===401){tokenStore('',false);throw Object.assign(new Error(typeof data==='string'?data:'Session expired'),{status:401})}if(!r.ok)throw Object.assign(new Error((data&&data.message)||String(data||r.statusText)),{status:r.status,data});return data}catch(e){if(e.name==='AbortError')throw new Error('Request timed out');if(e instanceof TypeError){throw new Error('Unable to reach ERP from this web app. Check internet and whether the Oracle API allows this PWA domain (CORS).')}throw e}finally{clearTimeout(timer)}}
-function cacheSet(k,v){try{localStorage.setItem('jasvi.cache.'+k,JSON.stringify({at:Date.now(),v}))}catch{}}
-function cacheGet(k){try{return JSON.parse(localStorage.getItem('jasvi.cache.'+k)||'null')}catch{return null}}
-function dialog({title='Notice',message='',kind='normal',confirm='OK',cancel='',onConfirm=()=>{}}){const el=document.createElement('div');el.className='dialog-backdrop';el.innerHTML=`<div class="dialog"><h3>${esc(title)}</h3><p>${esc(message)}</p><div class="dialog-actions">${cancel?`<button data-cancel>${esc(cancel)}</button>`:''}<button class="${kind==='danger'?'danger':'confirm'}" data-ok>${esc(confirm)}</button></div></div>`;el.querySelector('[data-ok]').onclick=()=>{el.remove();onConfirm()};el.querySelector('[data-cancel]')?.addEventListener('click',()=>el.remove());document.body.appendChild(el)}
-function sheet(title,actions=[]){const el=document.createElement('div');el.className='sheet-backdrop';el.innerHTML=`<div class="sheet"><div class="handle"></div><h3>${esc(title)}</h3>${actions.map((a,i)=>`<button class="action ${a.danger?'danger':''}" data-i="${i}">${esc(a.label)}</button>`).join('')}</div>`;el.onclick=e=>{if(e.target===el)el.remove()};el.querySelectorAll('[data-i]').forEach(b=>b.onclick=()=>{const a=actions[+b.dataset.i];el.remove();a.run?.()});document.body.appendChild(el)}
-function layout(content,{title,subtitle='',plus=false,refresh=false}={}){const initials=(state.user?.fullName||state.user?.username||'JI').split(/\s+/).map(x=>x[0]).join('').slice(0,2).toUpperCase();return `<div class="app"><main class="screen"><div class="topbar"><button class="icon-btn" id="menuBtn" aria-label="Menu">${svg('menu')}</button><div class="title"><h1>${esc(title)}</h1><p>${esc(subtitle)}</p></div>${plus?'<button class="plus-btn" id="plusBtn" aria-label="Add">+</button>':`<div class="avatar">${esc(initials)}</div>`}</div><div class="status-line"><span class="dot ${state.online?'':'offline'}"></span><span>${state.online?'Online':'Offline'} • ${esc(C.environment)} • ${esc(C.version)}</span></div>${installBanner()}${content}</main>${refresh?`<button class="fab-refresh" id="refreshFab" aria-label="Refresh">${svg('refresh')}</button>`:''}${bottomNav()}</div>`}
-function installBanner(){const standalone=window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone===true;if(standalone||sessionStorage.getItem('hide.install'))return'';return `<div class="install-banner">📲 <span>Add Jasvi ERP to your iPhone Home Screen for app-like launch.</span><button id="installHelp">How</button></div>`}
-function bottomNav(){const items=[['dashboard','Dashboard','home'],['sales','Sales','sales'],['bank','Bank Statement','bank'],['import','Import','upload'],['more','More','more']];return `<nav class="bottom-nav">${items.map(([id,l,ic])=>`<button class="nav-item ${state.tab===id?'active':''}" data-tab="${id}">${svg(ic)}<span>${esc(l)}</span></button>`).join('')}</nav>`}
-function bindCommon(){document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>navigate(b.dataset.tab));document.getElementById('menuBtn')?.addEventListener('click',()=>sheet('Jasvi Industries',[{label:'Dashboard',run:()=>navigate('dashboard')},{label:'Global Search',run:()=>openGlobalSearch()},{label:'Refresh current view',run:()=>loadCurrent(true)},{label:'Sign out',danger:true,run:logout}]));document.getElementById('installHelp')?.addEventListener('click',()=>dialog({title:'Add to Home Screen',message:'On iPhone Safari: tap Share, choose Add to Home Screen, then tap Add. After that you can open Jasvi ERP directly from the Home Screen.',confirm:'Got it',onConfirm:()=>{sessionStorage.setItem('hide.install','1')}}));document.getElementById('refreshFab')?.addEventListener('click',()=>loadCurrent(true))}
-async function loginScreen(message=''){root.innerHTML=`<div class="login-wrap"><div class="login-card"><div class="brand"><div class="brand-mark">JI</div><div><h1>Jasvi Industries</h1><p>ERP Mobile • ${esc(C.environment)}</p></div></div><form id="loginForm"><div class="field"><label>Username or Email</label><input id="identity" autocomplete="username" required></div><div class="field"><label>Password</label><input id="password" type="password" autocomplete="current-password" required></div><label style="display:flex;gap:8px;align-items:center;font-size:12px;color:var(--muted);margin:8px 0"><input id="remember" type="checkbox" style="width:auto"> Keep me signed in on this iPhone</label><div id="loginError" class="error-text">${esc(message)}</div><button class="primary" type="submit">Sign in</button></form><p class="login-note">This UAT PWA connects to the same Jasvi ERP authentication endpoint as Mobile. Browser access requires the Oracle API to allow the PWA origin.</p></div></div>`;document.getElementById('loginForm').onsubmit=async e=>{e.preventDefault();const identity=document.getElementById('identity').value.trim(),password=document.getElementById('password').value,remember=document.getElementById('remember').checked,err=document.getElementById('loginError');err.textContent='Signing in…';try{const r=await api('/api/auth/login',{method:'POST',body:{identity,password},auth:false});if(!r?.success)throw new Error(r?.message||'Login failed');if(r.mfaRequired){mfaScreen(r.challengeId,r.maskedDestination,remember);return}tokenStore(r.accessToken,remember);state.user=r.user||null;await bootstrap();navigate('dashboard')}catch(ex){err.textContent=ex.message}}}
-function mfaScreen(challengeId,masked,remember){root.innerHTML=`<div class="login-wrap"><div class="login-card"><div class="brand"><div class="brand-mark">✓</div><div><h1>Verify login</h1><p>${esc(masked||'Enter your authentication code')}</p></div></div><form id="mfaForm"><div class="field"><label>One-time code</label><input id="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="8" required></div><div id="mfaError" class="error-text"></div><button class="primary" type="submit">Verify</button><button class="secondary" type="button" id="backLogin">Back</button></form></div></div>`;document.getElementById('backLogin').onclick=()=>loginScreen();document.getElementById('mfaForm').onsubmit=async e=>{e.preventDefault();const err=document.getElementById('mfaError');try{const r=await api('/api/auth/login/mfa/complete',{method:'POST',body:{challengeId,otp:document.getElementById('otp').value.trim()},auth:false});if(!r?.success)throw new Error(r?.message||'Verification failed');tokenStore(r.accessToken,remember);state.user=r.user||null;await bootstrap();navigate('dashboard')}catch(ex){err.textContent=ex.message}}}
-async function bootstrap(){try{const [p,perms]=await Promise.all([api('/api/profile'),api('/api/auth/effective-permissions')]);state.user=p;state.permissions=perms||[]}catch(e){if(e.status===401)throw e}}
-function can(module,action){return state.permissions.some(p=>String(p.module).toUpperCase()===module&&String(p.action).toUpperCase()===action)}
-function navigate(tab){state.tab=tab;history.replaceState(null,'','#'+tab);render();loadCurrent(false)}
-function render(){if(!state.token){loginScreen();return}if(state.tab==='dashboard')renderDashboard();else if(state.tab==='sales')renderSales();else if(state.tab==='bank')renderBank();else if(state.tab==='import')renderImport();else renderMore();bindCommon()}
-async function loadCurrent(force){if(!state.token)return;if(state.tab==='dashboard')await loadDashboard(force);if(state.tab==='sales')await loadSales(force);if(state.tab==='bank')await loadBank(force);if(state.tab==='import')await loadImportHistory(force)}
-function renderDashboard(){const d=state.dashboard,s=d?.snapshot||{},recent=d?.recent||[],acts=d?.activities||[];root.innerHTML=layout(`${!d?'<div class="loading"><strong>Loading dashboard…</strong>Connecting to ERP</div>':`<div class="search" id="globalSearch">${svg('search')}<input placeholder="Search ERP records…" readonly></div><div class="kpis cols4"><div class="kpi green"><div class="label">Sales</div><div class="value">${shortMoney(s.salesValue)}</div></div><div class="kpi blue"><div class="label">Receivable</div><div class="value">${shortMoney(s.receivables)}</div></div><div class="kpi orange"><div class="label">Payable</div><div class="value">${shortMoney(s.payables)}</div></div><div class="kpi purple"><div class="label">Bank</div><div class="value">${shortMoney(s.cash)}</div></div><div class="section-head"><h2>Recent Documents</h2><button data-tab="sales">View Sales</button></div><div class="list">${recent.slice(0,6).map(r=>recordCard(r.number,r.party||r.type,r.amount,r.date,r.type,'Module')).join('')||'<div class="empty"><strong>No recent documents</strong>Nothing to display yet.</div>'}</div><div class="section-head"><h2>Follow-ups</h2><button id="openReminders">Reminders</button></div><div class="list">${acts.slice(0,4).map(a=>`<div class="card"><strong style="font-size:12px">${esc(a.title||a.category)}</strong><div class="meta" style="margin-top:3px">${esc(a.message||'')}</div></div>`).join('')||'<div class="empty"><strong>No follow-ups</strong>No active reminders.</div>'}</div>`}`,{title:'Dashboard',subtitle:state.user?.fullName||state.user?.username||'Business overview',refresh:true});bindCommon();document.getElementById('globalSearch')?.addEventListener('click',openGlobalSearch);document.getElementById('openReminders')?.addEventListener('click',()=>dialog({title:'Reminders',message:'Reminder list parity is available from the existing Insights API and will be surfaced under More in the next PWA parity pass.'}))}
-async function loadDashboard(force){if(!force){const c=cacheGet('dashboard');if(c&&!state.dashboard){state.dashboard=c.v;renderDashboard()}}try{const d=await api('/api/insights/dashboard?period='+encodeURIComponent('This Month'));state.dashboard=d;cacheSet('dashboard',d);renderDashboard()}catch(e){if(!state.dashboard)dialog({title:'Dashboard unavailable',message:e.message})}}
-function recordCard(title,sub,amount,meta,status,statusLabel='Status',extra=''){return `<div class="card record"><div class="record-icon">▤</div><div><h3>${esc(title||'Record')}</h3><div class="sub">${esc(sub||'')}</div><div class="meta">${esc(dateOnly(meta))}${extra?` • ${esc(extra)}`:''}</div></div><div><div class="amount">${typeof amount==='number'?rupee(amount):esc(amount||'')}</div>${status?`<div class="badge ${badgeClass(status)}">${esc(status)}</div>`:''}</div></div>`}
-function renderSales(){const s=state.sales,m=s.metrics||{};root.innerHTML=layout(`<div class="kpis"><div class="kpi green"><div class="label">Today</div><div class="value">${shortMoney(m.todaySales)}</div></div><div class="kpi orange"><div class="label">Pending</div><div class="value">${shortMoney(m.pendingBalance)}</div></div></div><div class="search">${svg('search')}<input id="salesQ" value="${esc(s.q)}" placeholder="Search invoices, customer…"><button class="more-btn" id="salesGo">⌕</button></div><div class="filters"><button class="chip ${!s.status?'active':''}" data-status="">All</button><button class="chip ${s.status==='PENDING'?'active':''}" data-status="PENDING">Pending</button><button class="chip ${s.status==='PAID'?'active':''}" data-status="PAID">Paid</button><button class="chip ${s.status==='PARTIAL'?'active':''}" data-status="PARTIAL">Partial</button></div><div class="list" id="salesList">${s.rows.length?s.rows.map(r=>recordCard(r.invoiceNo,r.customer?.name||r.customerName||'',Number(r.totalAmount??0),r.invoiceDate,r.paymentStatus||r.status||'', 'Status',`Paid ${rupee(r.paidAmount||0)} • Due ${rupee(Math.max(0,Number(r.totalAmount||0)-Number(r.paidAmount||0)))}`)).join(''):'<div class="loading"><strong>Loading sales…</strong>Fetching records</div>'}</div>`,{title:'Sales',subtitle:`${s.totalRows||0} records`,plus:can('SALES','CREATE'),refresh:true});bindCommon();const search=()=>{state.sales.q=document.getElementById('salesQ').value.trim();state.sales.page=0;loadSales(true)};document.getElementById('salesGo').onclick=search;document.getElementById('salesQ').onkeydown=e=>{if(e.key==='Enter')search()};document.querySelectorAll('[data-status]').forEach(b=>b.onclick=()=>{state.sales.status=b.dataset.status;loadSales(true)});document.getElementById('plusBtn')?.addEventListener('click',()=>dialog({title:'New Sale',message:'The native Mobile create-sale workflow remains server-authoritative. Full web create/edit parity will be added after UAT read/action validation.'}))}
-async function loadSales(force){try{const q=new URLSearchParams({page:String(state.sales.page),size:String(C.pageSize),q:state.sales.q,status:state.sales.status});const d=await api('/api/operations/sales/page?'+q);state.sales.rows=d.rows||[];state.sales.metrics=d.metrics||null;state.sales.totalRows=d.totalRows||0;cacheSet('sales',d);renderSales()}catch(e){const c=cacheGet('sales');if(c){state.sales.rows=c.v.rows||[];state.sales.metrics=c.v.metrics||null;state.sales.totalRows=c.v.totalRows||0;renderSales()}else dialog({title:'Sales unavailable',message:e.message})}}
-function renderBank(){const b=state.bank;if(!b.batch){root.innerHTML=layout(`<div class="search">${svg('search')}<input id="bankBatchQ" value="${esc(b.q)}" placeholder="Search bank imports…"><button class="more-btn" id="bankBatchGo">⌕</button></div><div class="list">${b.batches.length?b.batches.map(x=>`<div class="card record bank-batch" data-id="${x.id}"><div class="record-icon">▦</div><div><h3>${esc(x.bankName||'Bank Statement')}</h3><div class="sub">${esc(x.bankAccount||x.sourceFileName)}</div><div class="meta">${esc(x.transactionCount)} transactions • ${esc(x.reconciledCount)} reconciled • ${esc(dateOnly(x.importedAt))}</div></div><div><div class="amount">${esc(Math.round(x.reconciliationPercent||0))}%</div><div class="badge ${badgeClass(x.status)}">${esc(x.status||'Imported')}</div></div></div>`).join(''):'<div class="loading"><strong>Loading bank statements…</strong>Fetching imports</div>'}</div>`,{title:'Bank Statement',subtitle:'Imported statements',plus:true,refresh:true});bindCommon();document.getElementById('bankBatchGo').onclick=()=>{state.bank.q=document.getElementById('bankBatchQ').value.trim();loadBank(true)};document.querySelectorAll('.bank-batch').forEach(el=>el.onclick=()=>{state.bank.batch=state.bank.batches.find(x=>String(x.id)===el.dataset.id);loadBankTransactions(true)});document.getElementById('plusBtn').onclick=()=>navigate('import');return}
-const m=b.metrics||{},rows=b.transactions||[];root.innerHTML=layout(`<div class="kpis"><div class="kpi blue"><div class="label">Transactions</div><div class="value">${m.total||rows.length}</div></div><div class="kpi orange"><div class="label">Unmatched</div><div class="value">${m.unmatched||0}</div></div></div><div class="search">${svg('search')}<input id="bankTxnQ" value="${esc(b.q)}" placeholder="Search narration, reference…"><button class="more-btn" id="bankTxnGo">⌕</button></div><div class="filters"><button class="chip" id="backBatches">← Imports</button><button class="chip ${!b.status?'active':''}" data-bstatus="">All</button><button class="chip ${b.status==='MATCHED'?'active':''}" data-bstatus="MATCHED">Matched</button><button class="chip ${b.status==='PENDING'?'active':''}" data-bstatus="PENDING">Pending</button></div><div class="list">${rows.length?rows.map(t=>`<div class="card txn"><div class="arr ${Number(t.credit)>0?'in':'out'}">${Number(t.credit)>0?'↓':'↑'}</div><div><div class="narr">${esc(t.description||'Transaction')}</div><div class="ref">${esc(dateOnly(t.transactionDate))} • ${esc(t.reference||'')}</div><div class="badge ${badgeClass(t.status)}">${esc(t.status||'Pending')}</div></div><div><div class="money" style="color:${Number(t.credit)>0?'var(--green)':'var(--red)'}">${Number(t.credit)>0?'+ ':'- '}${rupee(Number(t.credit)>0?t.credit:t.debit)}</div><div class="balance">Bal ${rupee(t.balance)}</div></div></div>`).join(''):'<div class="empty"><strong>No transactions</strong>No rows match this view.</div>'}</div>`,{title:'Bank Statement',subtitle:`${b.batch.bankName} • ${b.batch.bankAccount}`,refresh:true});bindCommon();document.getElementById('backBatches').onclick=()=>{state.bank.batch=null;state.bank.transactions=[];renderBank()};document.getElementById('bankTxnGo').onclick=()=>{state.bank.q=document.getElementById('bankTxnQ').value.trim();loadBankTransactions(true)};document.querySelectorAll('[data-bstatus]').forEach(el=>el.onclick=()=>{state.bank.status=el.dataset.bstatus;loadBankTransactions(true)})}
-async function loadBank(force){if(state.bank.batch)return loadBankTransactions(force);try{const q=new URLSearchParams({page:'0',size:'50',q:state.bank.q});const d=await api('/api/bank-statements/imports/page?'+q);state.bank.batches=d.rows||[];cacheSet('bank.batches',d);renderBank()}catch(e){const c=cacheGet('bank.batches');if(c){state.bank.batches=c.v.rows||[];renderBank()}else dialog({title:'Bank Statement unavailable',message:e.message})}}
-async function loadBankTransactions(force){if(!state.bank.batch)return;try{const q=new URLSearchParams({page:'0',size:'100',q:state.bank.q,status:state.bank.status,direction:'ALL'});const d=await api(`/api/bank-statements/imports/${state.bank.batch.id}/page?`+q);state.bank.transactions=d.rows||[];state.bank.metrics=d.metrics||null;renderBank()}catch(e){dialog({title:'Transactions unavailable',message:e.message})}}
-function renderImport(){root.innerHTML=layout(`<div class="kpis cols4"><div class="kpi purple"><div class="label">Mode</div><div class="value">UAT</div></div><div class="kpi green"><div class="label">Safety</div><div class="value">Dry Run</div></div><div class="kpi blue"><div class="label">CSV</div><div class="value">Ready</div></div><div class="kpi orange"><div class="label">Writes</div><div class="value">Confirm</div></div></div><div class="import-tabs"><button class="${state.importTab==='history'?'active':''}" data-itab="history">Import History</button><button class="${state.importTab==='new'?'active':''}" data-itab="new">New Import</button></div><div id="importBody">${state.importTab==='history'?importHistoryHtml():newImportHtml()}</div>`,{title:'Import',subtitle:'Data Import & Sync',plus:true,refresh:true});bindCommon();document.querySelectorAll('[data-itab]').forEach(b=>b.onclick=()=>{state.importTab=b.dataset.itab;renderImport()});document.getElementById('plusBtn').onclick=()=>{state.importTab='new';renderImport()};bindImportBody()}
-function importHistoryHtml(){return `<div class="list">${state.bank.batches.length?state.bank.batches.slice(0,12).map(x=>`<div class="card record"><div class="record-icon">⇧</div><div><h3>${esc(x.sourceFileName||'Bank Statement Import')}</h3><div class="sub">${esc(x.bankName)} • ${esc(x.bankAccount)}</div><div class="meta">${esc(x.transactionCount)} rows • ${esc(x.reconciledCount)} reconciled • ${esc(dateOnly(x.importedAt))}</div></div><div><div class="badge ${badgeClass(x.status)}">${esc(x.status||'Imported')}</div></div></div>`).join(''):'<div class="empty"><strong>No import history</strong>Bank statement imports will appear here.</div>'}</div>`}
-function newImportHtml(){return `<div class="filebox"><strong>Bank Statement CSV</strong><div class="meta" style="margin-top:5px">Columns supported: transaction_date, description, reference, debit, credit, balance.</div><input type="file" id="bankCsv" accept=".csv,text/csv"></div><div class="field"><label>Bank Name *</label><input id="bankName" placeholder="e.g. HDFC Bank"></div><div class="field"><label>Bank Account *</label><input id="bankAccount" placeholder="e.g. 1234"></div><div class="field"><label>Account Holder</label><input id="bankHolder" value="Jasvi Industries"></div><div class="field"><label>Currency</label><input id="bankCurrency" value="INR"></div><label style="display:flex;gap:8px;align-items:center;font-size:12px;color:var(--muted)"><input id="dryRun" type="checkbox" checked style="width:auto"> Dry run first (recommended)</label><button class="primary" id="runImport">Validate / Import</button><div id="importResult"></div>`}
-function bindImportBody(){if(state.importTab==='history')return;document.getElementById('runImport').onclick=async()=>{const f=document.getElementById('bankCsv').files[0],bankName=document.getElementById('bankName').value.trim(),bankAccount=document.getElementById('bankAccount').value.trim(),holder=document.getElementById('bankHolder').value.trim(),currency=document.getElementById('bankCurrency').value.trim()||'INR',dry=document.getElementById('dryRun').checked,res=document.getElementById('importResult');if(!f||!bankName||!bankAccount){res.innerHTML='<div class="notice" style="color:var(--red)">Select a CSV file and enter Bank Name + Account.</div>';return}const execute=async()=>{res.innerHTML='<div class="loading"><strong>Processing import…</strong>Please wait</div>';try{const text=await f.text(),rows=parseCsv(text).map((r,i)=>toBankRow(r,i));if(!rows.length)throw new Error('CSV has no data rows');const dates=rows.map(r=>r.transactionDate).filter(Boolean).sort();const req={bankName,bankAccount,accountHolder:holder,statementFrom:dates[0]||'',statementTo:dates[dates.length-1]||'',currency,openingBalance:null,closingBalance:null,sourceFingerprint:hashText(f.name+'|'+text),sourceFileName:f.name,sourceCsv:text,importedBy:state.user?.username||'PWA',dryRun:dry,rows};const out=await api('/api/bank-statements/imports',{method:'POST',body:req});res.innerHTML=`<div class="notice"><strong>${dry?'Dry run complete':'Import complete'}</strong>&nbsp; ${esc(out.importedRows||0)} imported • ${esc(out.duplicateRows||0)} duplicate${out.alreadyImported?' • Already imported':''}</div>`;await loadBank(true)}catch(e){res.innerHTML=`<div class="notice" style="color:var(--red)">${esc(e.message)}</div>`}};if(dry)execute();else dialog({title:'Import Bank Statement?',message:`This will write ${f.name} to UAT ERP. Continue only after a successful Dry Run.`,confirm:'Import',cancel:'Cancel',onConfirm:execute})}}
-function parseCsv(text){const lines=[];let row=[],cell='',q=false;for(let i=0;i<text.length;i++){const ch=text[i],n=text[i+1];if(ch==='"'){if(q&&n==='"'){cell+='"';i++}else q=!q}else if(ch===','&&!q){row.push(cell);cell=''}else if((ch==='\n'||ch==='\r')&&!q){if(ch==='\r'&&n==='\n')i++;row.push(cell);cell='';if(row.some(x=>x.trim()!==''))lines.push(row);row=[]}else cell+=ch}if(cell||row.length){row.push(cell);lines.push(row)}if(lines.length<2)return[];const headers=lines[0].map(h=>h.trim().toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,''));return lines.slice(1).map(cols=>Object.fromEntries(headers.map((h,i)=>[h,(cols[i]||'').trim()]))) }
-function toBankRow(r,i){const amount=num(r.amount),dir=String(r.direction||'').toUpperCase(),debit=r.debit!==undefined?num(r.debit):(dir.startsWith('D')||amount<0?Math.abs(amount):0),credit=r.credit!==undefined?num(r.credit):(dir.startsWith('C')||amount>0?Math.abs(amount):0);return{sourceRowNumber:i+2,transactionTimestamp:r.transaction_timestamp||'',transactionDate:r.transaction_date||r.date||'',valueDate:r.value_date||'',description:r.description||r.narration||'',reference:r.reference||r.ref||'',debit,credit,balance:num(r.balance),transactionFingerprint:hashText(i+'|'+JSON.stringify(r))}}
-function num(v){return Number(String(v??'0').replace(/,/g,''))||0}function hashText(s){let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)}return (h>>>0).toString(16)}
-async function loadImportHistory(force){try{const d=await api('/api/bank-statements/imports/page?page=0&size=50');state.bank.batches=d.rows||[];renderImport()}catch(e){renderImport()}}
-function renderMore(){const mods=[['Global Search','Search across ERP','search'],['Purchases','Purchase register','sales'],['Quotations','Quotation register','sales'],['Returns','Sales & purchase returns','sales'],['Reports','Business reporting','home'],['Profile & Security','Account and session','more']];root.innerHTML=layout(`<div class="more-grid">${mods.map(([t,s,ic],i)=>`<button class="more-tile" data-more="${i}">${svg(ic)}<strong>${esc(t)}</strong><span>${esc(s)}</span></button>`).join('')}</div><div class="section-head"><h2>UAT Compatibility</h2></div><div class="card"><div class="meta">PWA ${esc(C.version)} • API ${esc(C.apiBaseUrl)}</div><div class="meta" style="margin-top:5px">Production switching is disabled until UAT acceptance.</div></div>`,{title:'More',subtitle:'All ERP modules'});bindCommon();document.querySelectorAll('[data-more]').forEach(b=>b.onclick=()=>{const i=+b.dataset.more;if(i===0)openGlobalSearch();else if(i===5)openProfile();else dialog({title:mods[i][0],message:'This module is already available in the native Mobile API contract. Full PWA screen/action parity will be added after the core UAT shell, authentication, Dashboard, Sales, Bank and Import are accepted.'})})}
-async function openGlobalSearch(){const el=document.createElement('div');el.className='dialog-backdrop';el.innerHTML=`<div class="dialog" style="max-height:82dvh;overflow:auto"><h3>Global Search</h3><div class="field"><input id="gsQ" placeholder="Invoice, party, payment, reference…" autofocus></div><button class="primary" id="gsGo">Search</button><div id="gsResult"></div><button class="secondary" id="gsClose">Close</button></div>`;document.body.appendChild(el);document.getElementById('gsClose').onclick=()=>el.remove();document.getElementById('gsGo').onclick=async()=>{const q=document.getElementById('gsQ').value.trim(),out=document.getElementById('gsResult');if(!q)return;out.innerHTML='<div class="loading"><strong>Searching…</strong></div>';try{const d=await api('/api/support/search?q='+encodeURIComponent(q));const rows=Array.isArray(d)?d:(d.rows||d.results||[]);out.innerHTML=`<div class="list" style="margin-top:8px">${rows.slice(0,25).map(r=>recordCard(r.number||r.referenceNo||r.title,r.party||r.subtitle||r.module||'',r.amount||'',r.date||'',r.status||r.module||'')).join('')||'<div class="empty"><strong>No results</strong>Try another search.</div>'}</div>`}catch(e){out.innerHTML=`<div class="error-text">${esc(e.message)}</div>`}}}
-function openProfile(){dialog({title:'Profile & Security',message:`Signed in as ${state.user?.fullName||state.user?.username||'User'} (${state.user?.role||'ERP role'}). PWA uses the same bearer-token ERP session. Native Face ID quick-unlock is not claimed for the PWA without WebAuthn/passkey server support.`,confirm:'OK'})}
-async function logout(){try{await api('/api/auth/logout',{method:'POST'})}catch{}tokenStore('',false);state.user=null;state.permissions=[];loginScreen('Signed out')}
-window.addEventListener('online',()=>{state.online=true;render()});window.addEventListener('offline',()=>{state.online=false;render()});window.addEventListener('hashchange',()=>{const t=location.hash.slice(1);if(['dashboard','sales','bank','import','more'].includes(t)){state.tab=t;render();loadCurrent(false)}});
-if('serviceWorker'in navigator){navigator.serviceWorker.register('sw.js').then(reg=>{reg.addEventListener('updatefound',()=>{const w=reg.installing;if(!w)return;w.addEventListener('statechange',()=>{if(w.state==='installed'&&navigator.serviceWorker.controller){dialog({title:'Update available',message:'A new Jasvi Industries PWA version is ready. Reload to use the latest version.',confirm:'Update now',cancel:'Later',onConfirm:()=>location.reload()})}})})}).catch(()=>{})}
-function installPwaUatV2(){
-  state.moreScreen=state.moreScreen||'menu';
-  state.moreRows=state.moreRows||[];
-  state.moreQuery=state.moreQuery||'';
-  state.moreLoading=false;
+const upper=v=>String(v||'').trim().toUpperCase();
+const bool=v=>v===true||String(v).toLowerCase()==='true';
+const statusClass=s=>{s=upper(s);if(/PAID|APPROVED|ACTIVE|MATCHED|RECONCILED|SUCCESS|SENT|READ|DONE/.test(s))return'green';if(/PENDING|PARTIAL|DRAFT|OPEN|REVIEW|SNOOZ/.test(s))return'orange';if(/CANCEL|DELETE|REJECT|FAILED|OVERDUE|ERROR|LOCKED/.test(s))return'red';return'purple'};
+const icon=(name)=>({dashboard:'⌂',sales:'▤',bank:'▣',import:'⇧',more:'•••',search:'⌕',bell:'◉',logout:'↪',menu:'☰',purchase:'▥',quote:'Q',return:'↩',masters:'◆',inventory:'▦',recon:'⇄',comms:'✉',reminder:'◷',report:'▧',profile:'◉',admin:'⚙',sync:'⟳',about:'i',finance:'₹'}[name]||'•');
 
-  function detailsMessage(rows){
-    return rows.filter(([k,v])=>v!==undefined&&v!==null&&String(v).trim()!=='')
-      .map(([k,v])=>`${k}: ${v}`).join('\n');
-  }
-
-  async function openCanonical(type,number,format){
-    try{
-      const r=await fetch(`${C.apiBaseUrl}/api/documents/render?type=${encodeURIComponent(type)}&number=${encodeURIComponent(number)}&format=${encodeURIComponent(format)}`,{
-        headers:{Authorization:`Bearer ${state.token}`,Accept:'*/*'},mode:'cors',credentials:'omit'
-      });
-      if(!r.ok) throw new Error(`Document ${r.status}`);
-      const blob=await r.blob();
-      const ext=format==='XLSX'?'xlsx':'pdf';
-      const fileName=`${type}-${number}.${ext}`.replace(/[^\w.\-]+/g,'_');
-      if(navigator.share&&typeof File!=='undefined'){
-        try{
-          const file=new File([blob],fileName,{type:blob.type||'application/octet-stream'});
-          if(navigator.canShare?.({files:[file]})){await navigator.share({files:[file],title:fileName});return;}
-        }catch{}
-      }
-      const url=URL.createObjectURL(blob),a=document.createElement('a');
-      a.href=url;a.download=fileName;document.body.appendChild(a);a.click();a.remove();
-      setTimeout(()=>URL.revokeObjectURL(url),30000);
-    }catch(e){dialog({title:`${format} unavailable`,message:e.message});}
-  }
-
-  async function showActivity(type,id,title){
-    try{
-      const rows=await api(`/api/support/activity?type=${encodeURIComponent(type)}&id=${encodeURIComponent(id)}`);
-      dialog({title:`${title} Activity`,message:(rows||[]).slice(-12).map(x=>`${x.at||x.date||''} ${x.action||''}${x.detail?` — ${x.detail}`:''}`).join('\n')||'No activity recorded.'});
-    }catch(e){dialog({title:'Activity unavailable',message:e.message});}
-  }
-
-  async function openSale(invoiceNo,actionsOnly=false){
-    try{
-      const d=await api('/api/operations/sales/by-invoice?invoiceNo='+encodeURIComponent(invoiceNo));
-      if(actionsOnly){
-        sheet(`${d.invoiceNo} Actions`,[
-          {label:'View Details',run:()=>openSale(invoiceNo,false)},
-          {label:'PDF / Print',run:()=>openCanonical('SALES',d.invoiceNo,'PDF')},
-          {label:'Excel',run:()=>openCanonical('SALES',d.invoiceNo,'XLSX')},
-          {label:'Activity Timeline',run:()=>showActivity('SALE',d.id,d.invoiceNo)}
-        ]);
-        return;
-      }
-      dialog({title:d.invoiceNo||'Sale',message:detailsMessage([
-        ['Customer',d.customer?.name],['Date',d.invoiceDate],['Status',d.documentStatus||d.paymentStatus],
-        ['Total',rupee(d.totalAmount)],['Paid',rupee(d.paidAmount)],['Due',rupee(Math.max(0,Number(d.totalAmount||0)-Number(d.paidAmount||0)))],
-        ['Reference',d.referenceNo],['Payment Terms',d.paymentTerms],['Salesperson',d.salesperson],['Notes',d.notes]
-      ]),confirm:'Actions',cancel:'Close',onConfirm:()=>openSale(invoiceNo,true)});
-    }catch(e){dialog({title:'Sale unavailable',message:e.message});}
-  }
-
-  async function openPurchase(invoiceNo,actionsOnly=false){
-    try{
-      const d=await api('/api/operations/purchases/by-invoice?invoiceNo='+encodeURIComponent(invoiceNo));
-      if(actionsOnly){
-        sheet(`${d.invoiceNo} Actions`,[
-          {label:'View Details',run:()=>openPurchase(invoiceNo,false)},
-          {label:'PDF / Print',run:()=>openCanonical('PURCHASE',d.invoiceNo,'PDF')},
-          {label:'Excel',run:()=>openCanonical('PURCHASE',d.invoiceNo,'XLSX')},
-          {label:'Activity Timeline',run:()=>showActivity('PURCHASE',d.id,d.invoiceNo)}
-        ]);
-        return;
-      }
-      dialog({title:d.invoiceNo||'Purchase',message:detailsMessage([
-        ['Supplier',d.supplier?.name],['Date',d.invoiceDate],['Status',d.documentStatus||d.paymentStatus],
-        ['Total',rupee(d.totalAmount)],['Paid',rupee(d.paidAmount)],['Due',rupee(Math.max(0,Number(d.totalAmount||0)-Number(d.paidAmount||0)))],
-        ['Reference',d.referenceNo],['Warehouse',d.warehouse],['Payment Terms',d.paymentTerms],['Notes',d.notes]
-      ]),confirm:'Actions',cancel:'Close',onConfirm:()=>openPurchase(invoiceNo,true)});
-    }catch(e){dialog({title:'Purchase unavailable',message:e.message});}
-  }
-
-  async function openQuotation(id){
-    try{
-      const d=await api(`/api/quotations/${encodeURIComponent(id)}`);
-      dialog({title:d.no||'Quotation',message:detailsMessage([
-        ['Customer',d.customer],['Date',d.date],['Valid Until',d.valid],['Status',d.status],['Amount',rupee(d.amount)],
-        ['Salesperson',d.salesperson],['Follow Up',d.followUp],['Source',d.source],['Remarks',d.remarks]
-      ])});
-    }catch(e){dialog({title:'Quotation unavailable',message:e.message});}
-  }
-
-  async function openReturn(no){
-    try{
-      const d=await api(`/api/returns/${encodeURIComponent(no)}`);
-      dialog({title:d.no||'Return',message:detailsMessage([
-        ['Type',d.type],['Invoice',d.invoice],['Party',d.party],['Date',d.date],['Status',d.status],
-        ['Refund Status',d.refundStatus],['Total',rupee(d.total)],['Refunded',rupee(d.refund)],['Notes',d.notes]
-      ])});
-    }catch(e){dialog({title:'Return unavailable',message:e.message});}
-  }
-
-  renderDashboard=function(){
-    const d=state.dashboard,s=d?.snapshot||{},recent=d?.recent||[],acts=d?.activities||[];
-    root.innerHTML=layout(`${!d?'<div class="loading"><strong>Loading dashboard…</strong>Connecting to ERP</div>':`
-      <div class="search" id="globalSearch">${svg('search')}<input placeholder="Search ERP records…" readonly></div>
-      <div class="kpis cols4">
-        <div class="kpi green"><div class="label">Sales</div><div class="value">${shortMoney(s.salesValue)}</div></div>
-        <div class="kpi blue"><div class="label">Receivable</div><div class="value">${shortMoney(s.receivables)}</div></div>
-        <div class="kpi orange"><div class="label">Payable</div><div class="value">${shortMoney(s.payables)}</div></div>
-        <div class="kpi purple"><div class="label">Bank</div><div class="value">${shortMoney(s.cash)}</div></div>
-      </div>
-      <div class="section-head"><h2>Recent Documents</h2><button data-tab="sales">View Sales</button></div>
-      <div class="list">${recent.slice(0,6).map(r=>recordCard(r.number,r.party||r.type,r.amount,r.date,r.type,'Module')).join('')||'<div class="empty"><strong>No recent documents</strong>Nothing to display yet.</div>'}</div>
-      <div class="section-head"><h2>Follow-ups</h2><button id="openReminders">Reminders</button></div>
-      <div class="list">${acts.slice(0,4).map(a=>`<div class="card"><strong style="font-size:12px">${esc(a.title||a.category)}</strong><div class="meta" style="margin-top:3px">${esc(a.message||'')}</div></div>`).join('')||'<div class="empty"><strong>No follow-ups</strong>No active reminders.</div>'}</div>
-    `}`,{title:'Dashboard',subtitle:state.user?.fullName||state.user?.username||'Business overview',refresh:true});
-    bindCommon();
-    document.getElementById('globalSearch')?.addEventListener('click',openGlobalSearch);
-    document.getElementById('openReminders')?.addEventListener('click',()=>dialog({title:'Reminders',message:'Reminder data is available through the ERP Insights feed. Full reminder management remains in native Mobile for this UAT pass.'}));
-  };
-
-  renderSales=function(){
-    const s=state.sales,m=s.metrics||{};
-    root.innerHTML=layout(`
-      <div class="kpis">
-        <div class="kpi green"><div class="label">Today</div><div class="value">${shortMoney(m.todaySales)}</div></div>
-        <div class="kpi orange"><div class="label">Pending</div><div class="value">${shortMoney(m.pendingBalance)}</div></div>
-      </div>
-      <div class="search">${svg('search')}<input id="salesQ" value="${esc(s.q)}" placeholder="Search invoices, customer…"><button class="more-btn" id="salesGo">⌕</button></div>
-      <div class="filters">
-        <button class="chip ${!s.status?'active':''}" data-status="">All</button>
-        <button class="chip ${s.status==='PENDING'?'active':''}" data-status="PENDING">Pending</button>
-        <button class="chip ${s.status==='PAID'?'active':''}" data-status="PAID">Paid</button>
-        <button class="chip ${s.status==='PARTIAL'?'active':''}" data-status="PARTIAL">Partial</button>
-      </div>
-      <div class="list" id="salesList">${s.rows.length?s.rows.map(r=>`
-        <div class="card record clickable-record" data-sale="${esc(r.invoiceNo)}">
-          <div class="record-icon">▤</div>
-          <div><h3>${esc(r.invoiceNo)}</h3><div class="sub">${esc(r.customer?.name||r.customerName||'')}</div>
-            <div class="meta">${esc(dateOnly(r.invoiceDate))} • Paid ${rupee(r.paidAmount||0)} • Due ${rupee(Math.max(0,Number(r.totalAmount||0)-Number(r.paidAmount||0)))}</div></div>
-          <div><button class="more-btn" data-sale-actions="${esc(r.invoiceNo)}">⋮</button><div class="amount">${rupee(Number(r.totalAmount||0))}</div><div class="badge ${badgeClass(r.paymentStatus||r.status||'')}">${esc(r.paymentStatus||r.status||'')}</div></div>
-        </div>`).join(''):'<div class="loading"><strong>Loading sales…</strong>Fetching records</div>'}</div>
-    `,{title:'Sales',subtitle:`${s.totalRows||0} records`,plus:can('SALES','CREATE'),refresh:true});
-    bindCommon();
-    const search=()=>{state.sales.q=document.getElementById('salesQ').value.trim();state.sales.page=0;loadSales(true)};
-    document.getElementById('salesGo').onclick=search;
-    document.getElementById('salesQ').onkeydown=e=>{if(e.key==='Enter')search()};
-    document.querySelectorAll('[data-status]').forEach(b=>b.onclick=()=>{state.sales.status=b.dataset.status;loadSales(true)});
-    document.querySelectorAll('[data-sale]').forEach(el=>el.addEventListener('click',e=>{
-      if(e.target.closest('[data-sale-actions]')) return;
-      openSale(el.dataset.sale,false);
-    }));
-    document.querySelectorAll('[data-sale-actions]').forEach(b=>b.onclick=e=>{e.stopPropagation();openSale(b.dataset.saleActions,true)});
-    document.getElementById('plusBtn')?.addEventListener('click',()=>dialog({title:'New Sale',message:'Create/Edit remains intentionally disabled in this PWA UAT build until read-only parity is accepted, so no business data can be changed accidentally.'}));
-  };
-
-  function moreMenu(){
-    return [
-      ['search','Global Search','Search across ERP','search'],
-      ['purchases','Purchases','Purchase register','sales'],
-      ['quotations','Quotations','Quotation register','sales'],
-      ['salesReturns','Sales Returns','Sales return register','sales'],
-      ['purchaseReturns','Purchase Returns','Purchase return register','sales'],
-      ['reports','Reports','Report definitions','home'],
-      ['profile','Profile & Security','Account and session','more']
-    ];
-  }
-
-  function moduleCard(screen,r){
-    if(screen==='purchases') return `<div class="card record more-record" data-purchase="${esc(r.invoiceNo)}"><div class="record-icon">▥</div><div><h3>${esc(r.invoiceNo)}</h3><div class="sub">${esc(r.supplier?.name||'')}</div><div class="meta">${esc(dateOnly(r.invoiceDate))} • ${esc(r.paymentStatus||r.documentStatus||'')}</div></div><div><div class="amount">${rupee(r.totalAmount)}</div><button class="more-btn" data-purchase-actions="${esc(r.invoiceNo)}">⋮</button></div></div>`;
-    if(screen==='quotations') return `<div class="card record more-record" data-quote="${esc(r.id)}"><div class="record-icon">Q</div><div><h3>${esc(r.no)}</h3><div class="sub">${esc(r.customer||'')}</div><div class="meta">${esc(dateOnly(r.date))} • ${esc(r.status||'')}</div></div><div class="amount">${rupee(r.amount)}</div></div>`;
-    if(screen==='salesReturns'||screen==='purchaseReturns') return `<div class="card record more-record" data-return="${esc(r.no)}"><div class="record-icon">↩</div><div><h3>${esc(r.no)}</h3><div class="sub">${esc(r.party||'')}</div><div class="meta">${esc(dateOnly(r.date))} • Invoice ${esc(r.invoice||'')} • ${esc(r.status||'')}</div></div><div class="amount">${rupee(r.total)}</div></div>`;
-    if(screen==='reports') return `<div class="card more-record" data-report="${esc(r.id)}"><strong>${esc(r.title)}</strong><div class="meta" style="margin-top:4px">${esc(r.category||'Report')} • ${esc(r.description||'')}</div></div>`;
-    return '';
-  }
-
-  function bindMoreModule(){
-    document.getElementById('moreBack')?.addEventListener('click',()=>{state.moreScreen='menu';state.moreRows=[];state.moreQuery='';renderMore()});
-    const runSearch=()=>{state.moreQuery=document.getElementById('moreQ')?.value.trim()||'';loadMoreCurrent(true)};
-    document.getElementById('moreGo')?.addEventListener('click',runSearch);
-    document.getElementById('moreQ')?.addEventListener('keydown',e=>{if(e.key==='Enter')runSearch()});
-    document.querySelectorAll('[data-purchase]').forEach(el=>el.onclick=e=>{if(e.target.closest('[data-purchase-actions]'))return;openPurchase(el.dataset.purchase,false)});
-    document.querySelectorAll('[data-purchase-actions]').forEach(b=>b.onclick=e=>{e.stopPropagation();openPurchase(b.dataset.purchaseActions,true)});
-    document.querySelectorAll('[data-quote]').forEach(el=>el.onclick=()=>openQuotation(el.dataset.quote));
-    document.querySelectorAll('[data-return]').forEach(el=>el.onclick=()=>openReturn(el.dataset.return));
-    document.querySelectorAll('[data-report]').forEach(el=>el.onclick=()=>{
-      const r=state.moreRows.find(x=>String(x.id)===el.dataset.report);
-      dialog({title:r?.title||'Report',message:detailsMessage([['Category',r?.category],['Description',r?.description],['Group By',(r?.groupByOptions||[]).join(', ')],['Filters',(r?.supportedFilters||[]).join(', ')]])});
-    });
-  }
-
-  renderMore=function(){
-    if(!state.moreScreen||state.moreScreen==='menu'){
-      const mods=moreMenu();
-      root.innerHTML=layout(`<div class="more-grid">${mods.map(([id,t,s,ic])=>`<button class="more-tile" data-more="${id}">${svg(ic)}<strong>${esc(t)}</strong><span>${esc(s)}</span></button>`).join('')}</div>
-        <div class="section-head"><h2>UAT</h2></div><div class="card"><div class="meta">PWA ${esc(C.version)} • API ${esc(C.apiBaseUrl)}</div><div class="meta" style="margin-top:5px">Read-only module parity enabled. Business writes remain blocked for safety.</div></div>`,
-        {title:'More',subtitle:'ERP modules'});
-      bindCommon();
-      document.querySelectorAll('[data-more]').forEach(b=>b.onclick=()=>{
-        const id=b.dataset.more;
-        if(id==='search') return openGlobalSearch();
-        if(id==='profile') return openProfile();
-        state.moreScreen=id;state.moreRows=[];state.moreQuery='';renderMore();loadMoreCurrent(true);
-      });
-      return;
-    }
-    const titles={purchases:'Purchases',quotations:'Quotations',salesReturns:'Sales Returns',purchaseReturns:'Purchase Returns',reports:'Reports'};
-    root.innerHTML=layout(`
-      <div class="filters"><button class="chip active" id="moreBack">← More</button></div>
-      ${state.moreScreen==='reports'?'':`<div class="search">${svg('search')}<input id="moreQ" value="${esc(state.moreQuery)}" placeholder="Search ${esc(titles[state.moreScreen]||'records')}…"><button class="more-btn" id="moreGo">⌕</button></div>`}
-      <div class="list">${state.moreLoading?'<div class="loading"><strong>Loading…</strong>Fetching ERP records</div>':state.moreRows.length?state.moreRows.map(r=>moduleCard(state.moreScreen,r)).join(''):'<div class="empty"><strong>No records</strong>Nothing matched this view.</div>'}</div>
-    `,{title:titles[state.moreScreen]||'More',subtitle:'Read-only UAT',refresh:true});
-    bindCommon();bindMoreModule();
-  };
-
-  async function loadMoreCurrent(force){
-    if(!state.moreScreen||state.moreScreen==='menu') return;
-    state.moreLoading=true;renderMore();
-    try{
-      let d;
-      if(state.moreScreen==='purchases'){
-        const q=new URLSearchParams({page:'0',size:'50',q:state.moreQuery});
-        d=await api('/api/operations/purchases/page?'+q);state.moreRows=d.rows||[];
-      }else if(state.moreScreen==='quotations'){
-        const q=new URLSearchParams({page:'0',size:'50',q:state.moreQuery});
-        d=await api('/api/quotations/page?'+q);state.moreRows=d.rows||[];
-      }else if(state.moreScreen==='salesReturns'||state.moreScreen==='purchaseReturns'){
-        const q=new URLSearchParams({type:state.moreScreen==='salesReturns'?'SALES':'PURCHASE',page:'0',size:'50',q:state.moreQuery});
-        d=await api('/api/returns/page?'+q);state.moreRows=d.rows||[];
-      }else if(state.moreScreen==='reports'){
-        d=await api('/api/reporting/definitions');state.moreRows=Array.isArray(d)?d:[];
-      }
-    }catch(e){
-      state.moreRows=[];
-      dialog({title:'Module unavailable',message:e.message});
-    }finally{
-      state.moreLoading=false;renderMore();
-    }
-  }
-
-  loadCurrent=async function(force){
-    if(!state.token)return;
-    if(state.tab==='dashboard')await loadDashboard(force);
-    if(state.tab==='sales')await loadSales(force);
-    if(state.tab==='bank')await loadBank(force);
-    if(state.tab==='import')await loadImportHistory(force);
-    if(state.tab==='more')await loadMoreCurrent(force);
-  };
+function tokenStore(token,remember=false){
+  state.token=token||'';state.remember=remember;
+  sessionStorage.removeItem(SESSION_KEY);localStorage.removeItem(TOKEN_KEY);
+  if(token){(remember?localStorage:sessionStorage).setItem(remember?TOKEN_KEY:SESSION_KEY,token)}
 }
-installPwaUatV2();
-(async function init(){if(state.token){try{await bootstrap();const h=location.hash.slice(1);state.tab=['dashboard','sales','bank','import','more'].includes(h)?h:'dashboard';render();loadCurrent(false)}catch(e){tokenStore('',false);loginScreen(e.message)}}else loginScreen()})();
+
+async function api(path,{method='GET',body,auth=true,raw=false,headers={}}={}){
+  const h={Accept:raw?'*/*':'application/json',...headers};
+  if(auth&&state.token)h.Authorization=`Bearer ${state.token}`;
+  let payload=body;
+  if(body!==undefined && !(body instanceof Blob) && !(body instanceof ArrayBuffer) && !(body instanceof Uint8Array) && typeof body!=='string'){
+    h['Content-Type']='application/json';payload=JSON.stringify(body);
+  }
+  const ctl=new AbortController();const timer=setTimeout(()=>ctl.abort(),C.requestTimeoutMs||30000);
+  let r;
+  try{r=await fetch(C.apiBaseUrl+path,{method,headers:h,body:payload,mode:'cors',credentials:'omit',signal:ctl.signal});}
+  catch(e){throw new Error(e.name==='AbortError'?'ERP request timed out.':'Unable to reach ERP from this web app.');}
+  finally{clearTimeout(timer)}
+  if(r.status===401){if(auth){tokenStore('',false);state.user=null;state.permissions=[];setTimeout(()=>renderLogin('Your ERP session expired. Please sign in again.'),0)}throw Object.assign(new Error('Authentication required'),{status:401});}
+  if(!r.ok){let msg=`ERP ${r.status}`;try{const t=await r.text();if(t){try{const j=JSON.parse(t);msg=j.message||j.code||t}catch{msg=t.slice(0,500)}}}catch{}throw Object.assign(new Error(msg),{status:r.status});}
+  if(raw)return r;
+  if(r.status===204)return null;
+  const txt=await r.text();return txt?JSON.parse(txt):null;
+}
+
+async function apiBlob(path){const r=await api(path,{raw:true});return {blob:await r.blob(),disposition:r.headers.get('content-disposition')||''};}
+
+function permModule(p){return upper(p.module||p.moduleKey||'')}
+function permAction(p){return upper(p.action||'VIEW')}
+function isAdmin(){return upper(state.user?.role).includes('ADMIN')||state.permissions.some(p=>permModule(p)==='ROLE_ADMIN'||upper(p.authority)==='ROLE_ADMIN')}
+function can(module,action='VIEW'){
+  const m=upper(module),a=upper(action);if(isAdmin())return true;
+  return state.permissions.some(p=>permModule(p)===m && (permAction(p)===a||upper(p.authority)===`${m}.${a}`) && p.allowed!==false);
+}
+
+function parseHash(){
+  const x=location.hash.replace(/^#/,'').split('/').filter(Boolean);
+  const main=['dashboard','sales','bank','import','more'].includes(x[0])?x[0]:'dashboard';
+  return {main,sub:main==='more'?(x[1]||null):null};
+}
+function go(main,sub=null){state.route={main,sub};state.drawer=false;location.hash='#'+main+(sub?'/'+sub:'');renderApp();loadCurrent();}
+
+function pageTitle(){
+  const main={dashboard:'Dashboard',sales:'Sales',bank:'Bank Statement',import:'Data Import',more:'More'}[state.route.main]||'Jasvi Industries';
+  if(state.route.main!=='more'||!state.route.sub)return main;
+  return MORE.find(x=>x.id===state.route.sub)?.label||main;
+}
+
+const MORE=[
+  {id:'purchase',label:'Purchase',sub:'Bills, suppliers, payments and Purchase actions',ic:'purchase'},
+  {id:'quotations',label:'Quotations',sub:'Quotes, follow-ups and conversion',ic:'quote'},
+  {id:'sales-returns',label:'Sales Returns',sub:'Return lifecycle and refunds',ic:'return'},
+  {id:'purchase-returns',label:'Purchase Returns',sub:'Supplier returns and refunds',ic:'return'},
+  {id:'masters',label:'Master Data',sub:'Customers, suppliers and lookups',ic:'masters'},
+  {id:'inventory',label:'Inventory',sub:'Items, stock and adjustments',ic:'inventory'},
+  {id:'purchase-recon',label:'Purchase Reconciliation',sub:'Supplier invoice reconciliation',ic:'recon'},
+  {id:'communications',label:'Communication Center',sub:'Email and message history',ic:'comms'},
+  {id:'reminders',label:'Reminders',sub:'Open, snooze and complete follow-ups',ic:'reminder'},
+  {id:'notifications',label:'Notifications',sub:'ERP alerts and record links',ic:'bell'},
+  {id:'reports',label:'Reports',sub:'Business reporting',ic:'report'},
+  {id:'profile',label:'Profile & Password',sub:'Account and security',ic:'profile'},
+  {id:'admin',label:'User Access & Roles',sub:'Users, roles and permissions',ic:'admin'},
+  {id:'import',label:'Data Import',sub:'Open full import workspace',ic:'import'},
+  {id:'sync',label:'Sync Center',sub:'Online status and local session',ic:'sync'},
+  {id:'about',label:'About',sub:'Build and compatibility',ic:'about'}
+];
+
+function appShell(content){
+  const active=state.route;
+  const drawerItems=[
+    ['dashboard','Dashboard','dashboard'],['sales','Sales','sales'],['bank','Bank Statement','bank'],['import','Import','import'],['more','More','more']
+  ];
+  return `<div class="app-shell ${state.drawer?'drawer-open':''}">
+    <aside class="sidebar" id="sidebar">
+      <div class="side-brand"><div class="brand-mark">JI</div><div><strong>Jasvi Industries</strong><span>ERP Mobile • UAT</span></div></div>
+      <nav class="side-nav">
+        ${drawerItems.map(([id,l,ic])=>`<button class="side-item ${active.main===id&&!active.sub?'active':''}" data-go="${id}"><span>${icon(ic)}</span><b>${l}</b></button>`).join('')}
+        <div class="side-sep">Modules</div>
+        ${MORE.filter(x=>!['import'].includes(x.id)).map(x=>`<button class="side-item ${active.main==='more'&&active.sub===x.id?'active':''}" data-sub="${x.id}"><span>${icon(x.ic)}</span><b>${esc(x.label)}</b></button>`).join('')}
+      </nav>
+      <div class="side-foot"><div class="mini-user"><strong>${esc(state.user?.fullName||state.user?.username||'ERP User')}</strong><span>${esc(state.user?.role||'')}</span></div><button class="side-logout" id="sideLogout">${icon('logout')} Sign out</button></div>
+    </aside>
+    <div class="drawer-scrim" id="drawerScrim"></div>
+    <main class="app-main">
+      <header class="topbar">
+        <button class="icon-btn" id="drawerBtn" aria-label="Menu">${icon('menu')}</button>
+        <div class="top-title"><strong>Jasvi Industries</strong><span>${esc(pageTitle())}</span></div>
+        <button class="icon-btn" id="searchBtn" aria-label="Global Search">${icon('search')}</button>
+        <button class="icon-btn" id="notifyBtn" aria-label="Notifications">${icon('bell')}</button>
+        <span class="conn-chip ${state.online?'ok':'bad'}"><i></i>${state.online?(state.pending?`${state.pending} pending`:'Online'):'Offline'}</span>
+        <button class="icon-btn top-logout" id="logoutBtn" aria-label="Logout">${icon('logout')}</button>
+      </header>
+      <section class="content">${content}</section>
+      <nav class="bottom-nav">
+        ${[['dashboard','Dashboard','dashboard'],['sales','Sales','sales'],['bank','Bank Statement','bank'],['import','Import','import'],['more','More','more']].map(([id,l,ic])=>`<button class="nav-item ${active.main===id?'active':''}" data-go="${id}"><span>${icon(ic)}</span><small>${l}</small></button>`).join('')}
+      </nav>
+    </main>
+  </div>`;
+}
+
+function renderApp(){
+  if(!state.token){renderLogin();return}
+  let content='';
+  if(state.route.main==='dashboard')content=dashboardHtml();
+  else if(state.route.main==='sales')content=salesHtml();
+  else if(state.route.main==='bank')content=bankHtml();
+  else if(state.route.main==='import')content=importHtml();
+  else content=moreHtml();
+  root.innerHTML=appShell(content);bindShell();bindScreen();
+}
+
+function bindShell(){
+  qsa('[data-go]').forEach(b=>b.onclick=()=>go(b.dataset.go));
+  qsa('[data-sub]').forEach(b=>b.onclick=()=>go('more',b.dataset.sub));
+  qsel('#drawerBtn')?.addEventListener('click',()=>{state.drawer=!state.drawer;document.querySelector('.app-shell')?.classList.toggle('drawer-open',state.drawer)});
+  qsel('#drawerScrim')?.addEventListener('click',()=>{state.drawer=false;document.querySelector('.app-shell')?.classList.remove('drawer-open')});
+  qsel('#searchBtn')?.addEventListener('click',openGlobalSearch);
+  qsel('#notifyBtn')?.addEventListener('click',()=>go('more','notifications'));
+  qsel('#logoutBtn')?.addEventListener('click',logout);qsel('#sideLogout')?.addEventListener('click',logout);
+}
+
+function renderLogin(message=''){
+  root.innerHTML=`<div class="login-wrap"><div class="login-card">
+    <div class="brand"><div class="brand-mark big">JI</div><div><h1>Jasvi Industries</h1><p>ERP Mobile • UAT</p></div></div>
+    <div class="login-hero"><strong>Secure ERP sign in</strong><span>Sales, purchases, inventory, finance and customer intelligence — one mobile workspace.</span></div>
+    <form id="loginForm">
+      <label class="field"><span>Server</span><input id="serverUrl" value="${esc(C.apiBaseUrl)}" readonly></label>
+      <label class="field"><span>Username or Email *</span><input id="identity" autocomplete="username" autocapitalize="none" required></label>
+      <label class="field"><span>Password *</span><input id="password" type="password" autocomplete="current-password" required></label>
+      <label class="remember"><input id="remember" type="checkbox" ${state.remember?'checked':''}> Keep me signed in on this iPhone</label>
+      <div id="loginError" class="error-text">${esc(message)}</div>
+      <button class="primary" type="submit">Sign in</button>
+      <button class="secondary" type="button" id="testServer">Test UAT Server</button>
+    </form>
+    <div class="login-links"><button id="forgotBtn">Forgot password?</button><button id="registerBtn">Register</button></div>
+    <p class="login-note">UAT only • ${esc(C.apiBaseUrl)} • PWA ${esc(C.version)}</p>
+  </div></div>`;
+  qsel('#loginForm').onsubmit=async e=>{e.preventDefault();const err=qsel('#loginError');err.textContent='Signing in…';try{
+    const r=await api('/api/auth/login',{method:'POST',body:{identity:qsel('#identity').value.trim(),password:qsel('#password').value},auth:false});
+    if(!r?.success)throw new Error(r?.message||'Login failed');
+    if(r.mfaRequired){renderMfa(r.challengeId,r.maskedDestination,qsel('#remember').checked);return}
+    tokenStore(r.accessToken,qsel('#remember').checked);state.user=r.user||null;await bootstrap();state.route=parseHash();renderApp();loadCurrent();
+  }catch(ex){err.textContent=ex.message}};
+  qsel('#testServer').onclick=async()=>{const err=qsel('#loginError');err.textContent='Testing UAT…';try{const h=await api('/api/runtime/health',{auth:false});err.textContent=`Connected • ${h.version||''} • ${h.environment||''} • ${h.databaseName||''}`;}catch(e){err.textContent=e.message}};
+  qsel('#forgotBtn').onclick=forgotPassword;qsel('#registerBtn').onclick=()=>dialog('Registration','Registration is supported by the ERP API. For UAT, use the same approved registration process as the native Mobile app.',[{label:'Close'}]);
+}
+
+function renderMfa(challengeId,masked,remember){root.innerHTML=`<div class="login-wrap"><div class="login-card"><div class="brand"><div class="brand-mark big">✓</div><div><h1>Verify Login</h1><p>${esc(masked||'Enter your authentication code')}</p></div></div><form id="mfaForm"><label class="field"><span>One-time code *</span><input id="otp" inputmode="numeric" autocomplete="one-time-code" required></label><div id="mfaError" class="error-text"></div><button class="primary">Verify</button><button class="secondary" type="button" id="mfaBack">Back</button></form></div></div>`;
+  qsel('#mfaBack').onclick=()=>renderLogin();qsel('#mfaForm').onsubmit=async e=>{e.preventDefault();const err=qsel('#mfaError');err.textContent='Verifying…';try{const r=await api('/api/auth/login/mfa/complete',{method:'POST',body:{challengeId,otp:qsel('#otp').value.trim()},auth:false});if(!r?.success)throw new Error(r?.message||'Verification failed');tokenStore(r.accessToken,remember);state.user=r.user||null;await bootstrap();state.route=parseHash();renderApp();loadCurrent();}catch(ex){err.textContent=ex.message}};
+}
+
+async function forgotPassword(){formDialog('Reset Password',[{id:'identity',label:'Username or Email',required:true}],async v=>{const r=await api('/api/auth/password-reset/request',{method:'POST',body:{identity:v.identity},auth:false});dialog('Reset request',r?.message||'Password reset request submitted.',[{label:'OK'}]);});}
+
+async function bootstrap(){
+  const [p,perms]=await Promise.all([api('/api/profile').catch(()=>null),api('/api/auth/effective-permissions')]);
+  if(p)state.user=p;state.permissions=Array.isArray(perms)?perms:[];state.online=true;
+}
+
+async function logout(){try{await api('/api/auth/logout',{method:'POST'})}catch{}tokenStore('',false);state.user=null;state.permissions=[];renderLogin('Signed out');}
+
+function screenHead(title,subtitle,actions=''){return `<div class="screen-head"><div><h1>${esc(title)}</h1><p>${esc(subtitle||'')}</p></div><div class="screen-actions">${actions}</div></div>`}
+function searchBox(id,value,placeholder){return `<div class="search"><span>${icon('search')}</span><input id="${id}" value="${esc(value||'')}" placeholder="${esc(placeholder)}"><button id="${id}Go">Search</button></div>`}
+function metric(label,value,cls='purple'){return `<div class="metric ${cls}"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`}
+function badge(v){return `<span class="badge ${statusClass(v)}">${esc(v||'—')}</span>`}
+function recordCard({id,title,sub,meta,amount,status,attrs='',iconText='▤',actions=true}){return `<article class="record-card" ${attrs}><div class="record-icon">${esc(iconText)}</div><div class="record-main"><h3>${esc(title||'Record')}</h3><p>${esc(sub||'')}</p><small>${esc(meta||'')}</small></div><div class="record-right"><strong>${amount!==undefined&&amount!==null?(typeof amount==='number'?rupee(amount):esc(amount)):''}</strong>${status?badge(status):''}${actions?`<button class="more-btn" data-actions="${esc(id||'')}">⋮ Actions</button>`:''}</div></article>`}
+function loading(label='Loading ERP records…'){return `<div class="state-card"><div class="spinner"></div><strong>${esc(label)}</strong><span>Please wait</span></div>`}
+function empty(title='No records',msg='Nothing matches this view.'){return `<div class="state-card"><strong>${esc(title)}</strong><span>${esc(msg)}</span></div>`}
+
+function dashboardHtml(){
+  const d=state.dashboard,s=d?.snapshot||{},recent=d?.recent||[],acts=d?.activities||[];
+  return `${screenHead('Dashboard',state.user?.fullName||state.user?.username||'Business overview')}
+    ${!d?loading('Loading dashboard records…'):`
+    <div class="dashboard-search" id="dashSearch">${icon('search')}<span>Search invoices, parties, items, payments, returns and bank records</span></div>
+    <div class="metrics four">${metric('Sales',rupee(s.salesValue),'green')}${metric('Receivable',rupee(s.receivables),'blue')}${metric('Payable',rupee(s.payables),'orange')}${metric('Bank',rupee(s.cash),'purple')}</div>
+    <div class="section-title"><h2>Recent Documents</h2><button data-go="sales">View Sales</button></div>
+    <div class="list">${recent.slice(0,6).map((r,i)=>recordCard({id:`dash-${i}`,title:r.number,sub:r.party||r.type,meta:r.date,amount:r.amount,status:r.type,attrs:`data-dashboard-record="${esc(r.type)}|${esc(r.number)}"`})).join('')||empty('No recent documents')}</div>
+    <div class="section-title"><h2>Follow-ups</h2><button data-open-reminders>Reminders</button></div>
+    <div class="list compact">${acts.slice(0,4).map((n,i)=>`<article class="notice-card" data-dashboard-notice="${i}"><b>${esc(n.title||n.category)}</b><span>${esc(n.message||'')}</span>${n.severity?badge(n.severity):''}</article>`).join('')||empty('No follow-ups','No active reminders or alerts.')}</div>
+    <div class="section-title"><h2>Quick Actions</h2><button data-go="more">More</button></div>
+    <div class="quick-grid"><button data-quick="new-sale">＋<b>New Sale</b></button><button data-quick="purchase">▥<b>Purchase</b></button><button data-quick="quote">Q<b>Quote</b></button><button data-quick="customer">＋<b>Customer</b></button></div>
+    `}`;
+}
+
+function salesHtml(){const d=state.sales,m=d?.metrics||{},rows=d?.rows||[];return `${screenHead('Sales',`${d?.totalRows||0} records`,can('SALES','CREATE')?'<button class="primary small" id="newSale">+ New Sale</button>':'')}
+  <div class="metrics">${metric('Total Sales',rupee(m.totalSales),'green')}${metric('Today',rupee(m.todaySales),'blue')}${metric('Pending',rupee(m.pendingBalance),'orange')}${metric('Overdue',rupee(m.overdueBalance),'red')}</div>
+  ${searchBox('salesQ',state.more.salesQ||'','Invoice, customer, amount…')}
+  <div class="chips"><button data-sales-status="" class="${!state.more.salesStatus?'active':''}">All</button><button data-sales-status="PENDING" class="${state.more.salesStatus==='PENDING'?'active':''}">Pending</button><button data-sales-status="PAID" class="${state.more.salesStatus==='PAID'?'active':''}">Paid</button><button data-sales-status="PARTIAL" class="${state.more.salesStatus==='PARTIAL'?'active':''}">Partial</button></div>
+  <div class="list">${d?rows.map(r=>recordCard({id:r.invoiceNo,title:r.invoiceNo,sub:r.customer?.name||'',meta:`${r.invoiceDate||''} • Paid ${rupee(r.paidAmount)} • Due ${rupee(Math.max(0,Number(r.totalAmount||0)-Number(r.paidAmount||0)))}`,amount:r.totalAmount,status:r.documentStatus||r.paymentStatus,attrs:`data-sale="${esc(r.invoiceNo)}"`})).join('')||empty('No sales records'):loading('Loading Sales…')}</div>`}
+
+function bankHtml(){
+  const b=state.bank;
+  const seg=`<div class="segmented"><button data-bank-mode="statement" class="${b.mode==='statement'?'active':''}">Bank Statement</button><button data-bank-mode="finance" class="${b.mode==='finance'?'active':''}">Bank & Expense</button></div>`;
+  if(b.mode==='finance'){
+    const d=b.finance,m=b.metrics||{},rows=d?.rows||[];return `${screenHead('Bank & Expense','Cash, bank and business expenses')}${seg}<div class="metrics">${metric('Bank Balance',rupee(m.bankBalance),'purple')}${metric('Credits',rupee(m.credits),'green')}${metric('Debits',rupee(m.debits),'red')}${metric('Pending Recon',rupee(m.pendingReconcileAmount),'orange')}</div>${searchBox('financeQ',state.more.financeQ||'','Voucher, category, reference…')}<div class="list">${d?rows.map(r=>recordCard({id:String(r.id),title:r.voucherNo,sub:r.category||r.voucherType,meta:`${r.voucherDate||''} • ${r.paymentMode||''} • ${r.accountName||''}`,amount:r.amount,status:r.reconciled?'RECONCILED':'PENDING',attrs:`data-finance="${r.id}"`})).join('')||empty('No finance entries'):loading('Loading Bank & Expense…')}</div>`;
+  }
+  if(b.batch){const rows=b.transactions?.rows||[];const m=b.transactions?.metrics||{};return `${screenHead('Bank Statement',`${b.batch.bankName||''} • ${b.batch.bankAccount||''}`)}${seg}<div class="chips"><button id="backBankBatches">← Imports</button><button data-bank-status="" class="${!state.more.bankStatus?'active':''}">All</button><button data-bank-status="MATCHED" class="${state.more.bankStatus==='MATCHED'?'active':''}">Matched</button><button data-bank-status="PENDING" class="${state.more.bankStatus==='PENDING'?'active':''}">Pending</button></div>${searchBox('bankTxnQ',state.more.bankTxnQ||'','Narration, reference…')}<div class="metrics">${metric('Transactions',String(m.total||rows.length),'blue')}${metric('Unmatched',String(m.unmatched||0),'orange')}</div><div class="list">${b.transactions?rows.map(t=>recordCard({id:String(t.id),title:t.description||'Transaction',sub:t.reference||'',meta:`${t.transactionDate||''} • Balance ${rupee(t.balance)}`,amount:Number(t.credit)>0?Number(t.credit):Number(t.debit),status:t.status,iconText:Number(t.credit)>0?'↓':'↑',attrs:`data-bank-txn="${t.id}"`})).join('')||empty('No transactions'):loading('Loading bank transactions…')}</div>`}
+  const rows=b.batches?.rows||[];return `${screenHead('Bank Statement','Imported statement batches','<button class="primary small" data-go="import">+ Import</button>')}${seg}${searchBox('bankBatchQ',state.more.bankBatchQ||'','Bank, account, source file…')}<div class="list">${b.batches?rows.map(x=>recordCard({id:String(x.id),title:x.bankName||'Bank Statement',sub:x.bankAccount||x.sourceFileName,meta:`${x.transactionCount||0} transactions • ${x.reconciledCount||0} reconciled • ${dateOnly(x.importedAt)}`,amount:`${Math.round(x.reconciliationPercent||0)}%`,status:x.status||'IMPORTED',iconText:'▣',attrs:`data-bank-batch="${x.id}"`})).join('')||empty('No bank imports'):loading('Loading bank statements…')}</div>`;
+}
+
+function importHtml(){const mode=state.more.importMode||'BANK';return `${screenHead('Data Import','Validate first, then import safely')}
+  <div class="import-grid"><div>${metric('Environment','UAT','purple')}</div><div>${metric('Safety','Dry Run First','green')}</div><div>${metric('Writes','Confirmation Required','orange')}</div></div>
+  <label class="field"><span>Module *</span><select id="importModule"><option ${mode==='BANK'?'selected':''}>BANK</option><option>ITEMS</option><option>CUSTOMERS</option><option>SUPPLIERS</option><option>SALES</option><option>PURCHASES</option><option>MASTER</option><option>PURCHASE_RECON</option></select></label>
+  <div class="filebox"><b>Select CSV file</b><span id="importHint">Choose the same module export/import format used by Mobile Phase 6.</span><input type="file" id="importFile" accept=".csv,text/csv"></div>
+  <div id="importMeta">${mode==='BANK'?bankImportMeta():''}</div>
+  <label class="remember"><input id="dryRun" type="checkbox" checked> Dry Run — validate only, no ERP writes</label>
+  <button class="primary" id="runImport">Validate / Dry Run</button><div id="importResult"></div>`}
+function bankImportMeta(){return `<label class="field"><span>Bank Name *</span><input id="bankName"></label><label class="field"><span>Bank Account *</span><input id="bankAccount"></label><label class="field"><span>Account Holder</span><input id="bankHolder" value="Jasvi Industries"></label><label class="field"><span>Currency</span><select id="bankCurrency"><option>INR</option><option>USD</option><option>EUR</option><option>GBP</option><option>AED</option></select></label>`}
+
+function moreHtml(){if(!state.route.sub)return `${screenHead('More','All ERP modules')}<div class="more-grid">${MORE.map(x=>`<button class="more-tile" data-sub="${x.id}"><span>${icon(x.ic)}</span><b>${esc(x.label)}</b><small>${esc(x.sub)}</small></button>`).join('')}</div>`;const sub=state.route.sub;return moreSubHtml(sub);}
+
+function moreSubHtml(sub){
+  if(sub==='purchase')return purchaseHtml();if(sub==='quotations')return quotationsHtml();if(sub==='sales-returns')return returnsHtml('SALES');if(sub==='purchase-returns')return returnsHtml('PURCHASE');if(sub==='masters')return mastersHtml();if(sub==='inventory')return inventoryHtml();if(sub==='purchase-recon')return reconHtml();if(sub==='communications')return commsHtml();if(sub==='reminders')return remindersHtml();if(sub==='notifications')return notificationsHtml();if(sub==='reports')return reportsHtml();if(sub==='profile')return profileHtml();if(sub==='admin')return adminHtml();if(sub==='import'){setTimeout(()=>go('import'),0);return loading('Opening Data Import…')}if(sub==='sync')return syncHtml();if(sub==='about')return aboutHtml();return empty('Module unavailable');
+}
+
+function purchaseHtml(){const d=state.purchases,m=d?.metrics||{},rows=d?.rows||[];return `${screenHead('Purchase',`${d?.totalRows||0} records`,can('PURCHASE','CREATE')?'<button class="primary small" id="newPurchase">+ New Purchase</button>':'')}
+ <div class="metrics">${metric('Purchases',rupee(m.totalPurchases),'orange')}${metric('Documents',String(m.activeDocuments||0),'blue')}${metric('Suppliers',String(m.suppliers||0),'purple')}${metric('Paid',rupee(m.paidAmount),'green')}</div>${searchBox('purchaseQ',state.more.purchaseQ||'','Invoice, supplier…')}<div class="list">${d?rows.map(r=>recordCard({id:r.invoiceNo,title:r.invoiceNo,sub:r.supplier?.name||'',meta:`${r.invoiceDate||''} • Paid ${rupee(r.paidAmount)} • Due ${rupee(Math.max(0,Number(r.totalAmount||0)-Number(r.paidAmount||0)))}`,amount:r.totalAmount,status:r.documentStatus||r.paymentStatus,attrs:`data-purchase="${esc(r.invoiceNo)}"`})).join('')||empty('No purchase records'):loading('Loading Purchases…')}</div>`}
+function quotationsHtml(){const d=state.quotes,m=d?.metrics||{},rows=d?.rows||[];return `${screenHead('Quotations',`${d?.totalRows||0} records`,can('QUOTATION','CREATE')?'<button class="primary small" id="newQuote">+ New Quotation</button>':'')}<div class="metrics">${metric('Total',rupee(m.totalValue),'purple')}${metric('Pending',rupee(m.pendingValue),'orange')}${metric('Accepted',rupee(m.acceptedValue),'green')}${metric('Conversion',`${Number(m.conversionRate||0).toFixed(0)}%`,'blue')}</div>${searchBox('quoteQ',state.more.quoteQ||'','Quotation, customer…')}<div class="list">${d?rows.map(r=>recordCard({id:String(r.id),title:r.no,sub:r.customer,meta:`${r.date||''} • Valid ${r.valid||''}`,amount:r.amount,status:r.status,attrs:`data-quote="${r.id}"`})).join('')||empty('No quotations'):loading('Loading Quotations…')}</div>`}
+function returnsHtml(type){const d=state.returns[type],m=d?.metrics||{},rows=d?.rows||[];const label=type==='SALES'?'Sales Returns':'Purchase Returns';return `${screenHead(label,`${d?.totalRows||0} records`)}<div class="metrics">${metric('Total',rupee(m.total),'purple')}${metric('This Month',rupee(m.monthAmount),'blue')}${metric('Approved',rupee(m.approvedAmount),'green')}${metric('Refunded',rupee(m.refundAmount),'orange')}</div>${searchBox('returnQ',state.more.returnQ||'',`Search ${label.toLowerCase()}…`)}<div class="list">${d?rows.map(r=>recordCard({id:r.no,title:r.no,sub:r.party,meta:`${r.date||''} • Original ${r.invoice||''} • Refund ${rupee(r.refund)}`,amount:r.total,status:r.status,attrs:`data-return="${esc(r.no)}" data-return-type="${type}"`})).join('')||empty(`No ${label.toLowerCase()}`):loading(`Loading ${label}…`)}</div>`}
+function mastersHtml(){const mode=state.more.masterMode||'CUSTOMER',d=state.more.masterData;return `${screenHead('Master Data','Customers, suppliers and lookups')}<div class="segmented"><button data-master-mode="CUSTOMER" class="${mode==='CUSTOMER'?'active':''}">Customers</button><button data-master-mode="SUPPLIER" class="${mode==='SUPPLIER'?'active':''}">Suppliers</button><button data-master-mode="LOOKUPS" class="${mode==='LOOKUPS'?'active':''}">Lookups</button></div>${searchBox('masterQ',state.more.masterQ||'','Search master records…')}<div class="list">${d?d.map(r=>mode==='LOOKUPS'?recordCard({id:String(r.id),title:r.value||r.name||r.code,sub:r.categoryCode||r.lookupType||'',meta:r.description||'',status:r.active?'ACTIVE':'INACTIVE',attrs:`data-lookup="${r.id}"`}):recordCard({id:String(r.id),title:r.name,sub:`${r.partyCode||''} • ${r.phone||''}`,meta:`${r.gstin||''} • ${r.email||''}`,amount:r.openingBalance,status:r.active?'ACTIVE':'INACTIVE',attrs:`data-party="${r.id}"`})).join('')||empty('No master records'):loading('Loading Master Data…')}</div>`}
+function inventoryHtml(){const d=state.more.inventory;return `${screenHead('Inventory','Items, stock and adjustments',can('INVENTORY','CREATE')?'<button class="primary small" id="newItem">+ New Item</button>':'')}${searchBox('itemQ',state.more.itemQ||'','Code, description, category…')}<div class="list">${d?d.map(r=>recordCard({id:r.itemCode,title:r.itemCode,sub:r.description,meta:`${r.category||''} • ${r.unit||''} • GST ${r.gst||0}% • Min ${r.minimumStock||0}`,amount:r.sellingPrice,status:r.active?'ACTIVE':'INACTIVE',attrs:`data-item="${esc(r.itemCode)}"`})).join('')||empty('No inventory items'):loading('Loading Inventory…')}</div>`}
+function reconHtml(){const d=state.more.recon,m=d?.metrics||{},rows=d?.rows||[];return `${screenHead('Purchase Reconciliation',`${d?.totalRows||0} records`)}<div class="metrics">${metric('Open',String(m.open||0),'orange')}${metric('Partial',String(m.partial||0),'blue')}${metric('Reconciled',String(m.reconciled||0),'green')}${metric('Outstanding',rupee(m.outstandingValue),'red')}</div>${searchBox('reconQ',state.more.reconQ||'','Supplier, invoice, reference…')}<div class="list">${d?rows.map(r=>recordCard({id:String(r.id),title:r.reference||r.supplierInvoiceNo,sub:r.supplierName,meta:`${r.invoiceDate||''} • Invoice ${rupee(r.invoiceValue)} • Linked ${rupee(r.linkedAmount)}`,amount:r.balance,status:r.status,attrs:`data-recon="${r.id}"`})).join('')||empty('No reconciliation records'):loading('Loading Purchase Reconciliation…')}</div>`}
+function commsHtml(){const d=state.more.comms;return `${screenHead('Communication Center','Email and message history')}${searchBox('commsQ',state.more.commsQ||'','Recipient, subject, document…')}<div class="list">${d?d.filter(r=>!state.more.commsQ||JSON.stringify(r).toLowerCase().includes(state.more.commsQ.toLowerCase())).map(r=>recordCard({id:String(r.id),title:r.documentLabel||r.subject||r.channel,sub:`${r.channel||''} • ${r.recipient||''}`,meta:`${r.createdAt||''} • ${r.createdBy||''}`,status:r.status,actions:false})).join('')||empty('No communications'):loading('Loading Communications…')}</div>`}
+function remindersHtml(){const d=state.more.reminders;return `${screenHead('Reminders','Open, snooze and complete follow-ups',can('REMINDERS','CREATE')?'<button class="primary small" id="newReminder">+ Reminder</button>':'')}<div class="list">${d?d.map(r=>recordCard({id:String(r.id),title:r.title,sub:r.referenceNo||r.notes,meta:`Due ${r.dueDate||''} • ${r.priority||''}${r.snoozedUntil?` • Snoozed ${r.snoozedUntil}`:''}`,status:r.status,attrs:`data-reminder="${r.id}"`})).join('')||empty('No reminders'):loading('Loading Reminders…')}</div>`}
+function notificationsHtml(){const d=state.more.notifications;return `${screenHead('Notifications','ERP alerts and record links','<button class="secondary small" id="readAll">Mark All Read</button>')}<div class="list">${d?d.map(r=>`<article class="notice-card notification ${r.read?'read':''}" data-notification="${r.id}"><b>${esc(r.title||r.category)}</b><span>${esc(r.message||'')}</span><small>${r.createdAt?new Date(r.createdAt).toLocaleString():''}</small>${badge(r.read?'READ':r.severity||'NEW')}<button class="more-btn" data-notification-actions="${r.id}">⋮ Actions</button></article>`).join('')||empty('No notifications'):loading('Loading Notifications…')}</div>`}
+function reportsHtml(){const d=state.more.reports;const f=state.more.reportFilter||{from:thirtyDaysAgo(),to:today(),type:''};return `${screenHead('Reports','Business reporting')}<div class="report-filters"><label>From<input id="reportFrom" type="date" value="${esc(f.from)}"></label><label>To<input id="reportTo" type="date" value="${esc(f.to)}"></label><button class="primary small" id="runReport">Run</button></div>${d?`<div class="metrics">${metric('Sales',rupee(d.sales),'green')}${metric('Purchase',rupee(d.purchase),'orange')}${metric('Profit',rupee(d.profit),'purple')}${metric('Receivables',rupee(d.receivables),'blue')}</div><div class="section-title"><h2>Sales</h2></div><div class="list">${(d.salesRows||[]).slice(0,50).map(r=>recordCard({id:r.number,title:r.number,sub:r.party,meta:r.date,amount:r.amount,status:r.status,actions:false})).join('')||empty('No sales report rows')}</div>`:loading('Loading Reports…')}`}
+function profileHtml(){const p=state.more.profile||state.user||{};return `${screenHead('Profile & Password','Account and security')}<div class="detail-card"><dl>${detailRows([['Username',p.username],['Full Name',p.fullName],['Email',p.email],['Role',p.role],['Department',p.department],['Branch',p.branch]])}</dl></div><div class="action-grid"><button id="editProfile">✎ Edit Profile</button><button id="changePassword">⌁ Change Password</button><button id="profileLogout">↪ Sign out</button></div><div class="info-card"><b>iPhone Security</b><span>Native Phase 7 Face ID/Touch ID quick unlock is an iOS native feature. This PWA uses the secure ERP bearer session and iPhone web storage; WebAuthn/passkey support is not available from the current server contract.</span></div>`}
+function adminHtml(){const d=state.more.admin||{};return `${screenHead('User Access & Roles','Users, roles and permissions')}<div class="segmented"><button data-admin-tab="users" class="${(state.more.adminTab||'users')==='users'?'active':''}">Users</button><button data-admin-tab="roles" class="${state.more.adminTab==='roles'?'active':''}">Roles</button></div><div class="list">${state.more.adminTab==='roles'?(d.roles?d.roles.map(r=>recordCard({id:String(r.id),title:r.displayName||r.code,sub:r.code,meta:`${r.userCount||0} user(s) • ${r.description||''}`,status:r.active?'ACTIVE':'INACTIVE',actions:false})).join('')||empty('No roles'):loading('Loading Roles…')):(d.users?d.users.map(r=>recordCard({id:String(r.id),title:r.fullName||r.username,sub:`${r.username} • ${r.email||''}`,meta:`${r.role||''} • ${r.department||''} • ${r.lastLogin||''}`,status:r.locked?'LOCKED':r.active?'ACTIVE':'INACTIVE',attrs:`data-admin-user="${r.id}"`})).join('')||empty('No users'):loading('Loading Users…'))}</div>`}
+function syncHtml(){return `${screenHead('Sync Center','Connection and session status')}<div class="metrics">${metric('Network',state.online?'ONLINE':'OFFLINE',state.online?'green':'red')}${metric('Pending Local Sync',String(state.pending||0),'orange')}${metric('API',C.apiBaseUrl,'blue')}</div><div class="info-card"><b>Phase 7 sync behavior</b><span>The server v9.0.92 contract does not provide a durable mobile change-feed endpoint. The native app keeps an explicit local outbox for selected offline-safe updates. The PWA does not silently queue financial writes.</span></div><button class="primary" id="syncHealth">Check ERP Now</button>`}
+function aboutHtml(){return `${screenHead('About','Jasvi Industries Mobile')}<div class="detail-card"><dl>${detailRows([['PWA Version',C.version],['Environment',C.environment],['API',C.apiBaseUrl],['Phase Baseline','Phase 6 centralized data-first + Phase 7 iPhone polish'],['Production Switch','Disabled in UAT']])}</dl></div>`}
+
+function detailRows(rows){return rows.filter(([,v])=>v!==undefined&&v!==null&&String(v)!=='').map(([k,v])=>`<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}
+function objDetails(title,obj,actions=[]){const rows=Object.entries(obj||{}).filter(([k,v])=>!Array.isArray(v)&&typeof v!=='object'&&v!==null&&v!=='').slice(0,40);dialog(title,`<dl class="dialog-dl">${detailRows(rows.map(([k,v])=>[k.replace(/([A-Z])/g,' $1').replace(/^./,c=>c.toUpperCase()),v]))}</dl>`,actions,true)}
+
+function dialog(title,message,actions=[{label:'OK'}],html=false){
+  const wrap=document.createElement('div');wrap.className='modal-backdrop';wrap.innerHTML=`<div class="dialog"><h2>${esc(title)}</h2><div class="dialog-body">${html?message:`<p class="preline">${esc(message||'')}</p>`}</div><div class="dialog-actions">${actions.map((a,i)=>`<button data-dialog-action="${i}" class="${a.destructive?'danger':a.primary?'primary':'secondary'}" ${a.enabled===false?'disabled':''}>${esc(a.label)}</button>`).join('')}</div></div>`;document.body.appendChild(wrap);qsa('[data-dialog-action]',wrap).forEach?.(()=>{});
+  wrap.querySelectorAll('[data-dialog-action]').forEach(b=>b.onclick=async()=>{const a=actions[+b.dataset.dialogAction];if(a.enabled===false)return;wrap.remove();if(a.run)await a.run()});wrap.addEventListener('click',e=>{if(e.target===wrap)wrap.remove()});return wrap;
+}
+function sheet(title,actions){const wrap=document.createElement('div');wrap.className='sheet-backdrop';wrap.innerHTML=`<div class="sheet"><div class="handle"></div><h2>${esc(title)}</h2><div class="sheet-actions">${actions.map((a,i)=>`<button data-sheet-action="${i}" class="${a.destructive?'danger':''}" ${a.enabled===false?'disabled':''}><span>${esc(a.icon||'›')}</span><b>${esc(a.label)}</b>${a.enabled===false&&a.reason?`<small>${esc(a.reason)}</small>`:''}</button>`).join('')}</div><button class="secondary" id="sheetClose">Close</button></div>`;document.body.appendChild(wrap);wrap.querySelector('#sheetClose').onclick=()=>wrap.remove();wrap.querySelectorAll('[data-sheet-action]').forEach(b=>b.onclick=async()=>{const a=actions[+b.dataset.sheetAction];if(a.enabled===false)return;wrap.remove();if(a.run)await a.run()});wrap.addEventListener('click',e=>{if(e.target===wrap)wrap.remove()});}
+function formDialog(title,fields,onSubmit,{submit='Save',danger=false,values={}}={}){const wrap=document.createElement('div');wrap.className='modal-backdrop';wrap.innerHTML=`<div class="dialog"><h2>${esc(title)}</h2><form id="genericForm" class="form-grid">${fields.map(f=>`<label class="field"><span>${esc(f.label)}${f.required?' *':''}</span>${f.type==='select'?`<select name="${f.id}" ${f.required?'required':''}>${(f.options||[]).map(o=>`<option ${String(values[f.id]??f.value??'')===String(o)?'selected':''}>${esc(o)}</option>`).join('')}</select>`:`<input name="${f.id}" type="${f.type||'text'}" value="${esc(values[f.id]??f.value??'')}" ${f.required?'required':''} ${f.step?`step="${f.step}"`:''}>`}</label>`).join('')}<div id="formError" class="error-text"></div><div class="dialog-actions"><button type="button" class="secondary" id="formCancel">Cancel</button><button class="${danger?'danger':'primary'}" type="submit">${esc(submit)}</button></div></form></div>`;document.body.appendChild(wrap);wrap.querySelector('#formCancel').onclick=()=>wrap.remove();wrap.querySelector('#genericForm').onsubmit=async e=>{e.preventDefault();const data=Object.fromEntries(new FormData(e.target).entries());const err=wrap.querySelector('#formError');try{err.textContent='Working…';await onSubmit(data);wrap.remove()}catch(ex){err.textContent=ex.message}};}
+function confirmWrite(title,message,run){dialog(title,message,[{label:'Cancel'},{label:'Confirm',primary:true,run}],false)}
+
+async function loadCurrent(){if(!state.token)return;try{state.online=true;if(state.route.main==='dashboard')await loadDashboard();else if(state.route.main==='sales')await loadSales();else if(state.route.main==='bank')await loadBank();else if(state.route.main==='more'&&state.route.sub)await loadMore(state.route.sub);}catch(e){state.online=false;toast(e.message,'error')}finally{renderApp()}}
+async function loadDashboard(){state.dashboard=await api('/api/insights/dashboard?period='+encodeURIComponent('This Month'))}
+async function loadSales(){const q=new URLSearchParams({page:'0',size:'50',q:state.more.salesQ||'',paymentStatus:state.more.salesStatus||'',includeSummary:'true',includeCharts:'true',includeOptions:'true'});state.sales=await api('/api/operations/sales/page?'+q)}
+async function loadPurchases(){const q=new URLSearchParams({page:'0',size:'50',q:state.more.purchaseQ||'',includeSummary:'true',includeOptions:'true'});state.purchases=await api('/api/operations/purchases/page?'+q)}
+async function loadQuotes(){const q=new URLSearchParams({page:'0',size:'50',q:state.more.quoteQ||''});state.quotes=await api('/api/quotations/page?'+q)}
+async function loadReturns(type){const q=new URLSearchParams({type,page:'0',size:'50',q:state.more.returnQ||''});state.returns[type]=await api('/api/returns/page?'+q)}
+async function loadBank(){if(state.bank.mode==='finance'){const q=new URLSearchParams({page:'0',size:'50',q:state.more.financeQ||''});const [d,m]=await Promise.all([api('/api/operations/finance/page?'+q),api('/api/operations/finance/metrics')]);state.bank.finance=d;state.bank.metrics=m;return}if(state.bank.batch){const q=new URLSearchParams({page:'0',size:'100',q:state.more.bankTxnQ||'',status:state.more.bankStatus||'',direction:'ALL'});state.bank.transactions=await api(`/api/bank-statements/imports/${state.bank.batch.id}/page?`+q);return}const q=new URLSearchParams({page:'0',size:'50',q:state.more.bankBatchQ||''});state.bank.batches=await api('/api/bank-statements/imports/page?'+q)}
+async function loadMore(sub){
+  if(sub==='purchase')return loadPurchases();if(sub==='quotations')return loadQuotes();if(sub==='sales-returns')return loadReturns('SALES');if(sub==='purchase-returns')return loadReturns('PURCHASE');
+  if(sub==='masters'){const mode=state.more.masterMode||'CUSTOMER';if(mode==='LOOKUPS')state.more.masterData=await api('/api/master/lookups?type=&q=').catch(()=>[]);else state.more.masterData=await api('/api/master/parties?type='+mode);return}
+  if(sub==='inventory'){state.more.inventory=await api('/api/master/items');return}
+  if(sub==='purchase-recon'){const q=new URLSearchParams({page:'0',size:'50',q:state.more.reconQ||'',status:''});state.more.recon=await api('/api/purchase-recon/records/page?'+q);return}
+  if(sub==='communications'){state.more.comms=await api('/api/support/communications');return}
+  if(sub==='reminders'){state.more.reminders=await api('/api/insights/reminders');return}
+  if(sub==='notifications'){state.more.notifications=await api('/api/insights/notifications?limit=100');return}
+  if(sub==='reports'){const f=state.more.reportFilter||{from:thirtyDaysAgo(),to:today(),type:''};const q=new URLSearchParams({from:f.from,to:f.to,reportType:f.type||'',party:'',item:'',salesperson:''});state.more.reports=await api('/api/insights/reports?'+q);return}
+  if(sub==='profile'){state.more.profile=await api('/api/profile');return}
+  if(sub==='admin'){if(!isAdmin()&&!can('USERS','VIEW')){state.more.admin={users:[],roles:[]};return}const [users,roles]=await Promise.all([api('/api/admin/users'),api('/api/admin/roles')]);state.more.admin={users,roles};return}
+}
+
+function bindScreen(){
+  if(state.route.main==='dashboard')bindDashboard();else if(state.route.main==='sales')bindSales();else if(state.route.main==='bank')bindBank();else if(state.route.main==='import')bindImport();else bindMore();
+}
+function bindDashboard(){qsel('#dashSearch')?.addEventListener('click',openGlobalSearch);qsel('[data-open-reminders]')?.addEventListener('click',()=>go('more','reminders'));qsa('[data-dashboard-record]').forEach(el=>el.onclick=()=>{const [m,ref]=el.dataset.dashboardRecord.split('|');openResolved(m,ref)});qsa('[data-quick]').forEach(b=>b.onclick=()=>{const k=b.dataset.quick;if(k==='new-sale')dialog('New Sale','The Phase 7 native Sale editor includes line items, GST, charges and approval controls. This PWA keeps the action visible but does not submit an incomplete document form.',[{label:'Close'}]);if(k==='purchase')go('more','purchase');if(k==='quote')go('more','quotations');if(k==='customer')go('more','masters')})}
+function bindSales(){const search=()=>{state.more.salesQ=qsel('#salesQ').value.trim();loadSales().then(renderApp)};qsel('#salesQGo')?.addEventListener('click',search);qsel('#salesQ')?.addEventListener('keydown',e=>{if(e.key==='Enter')search()});qsa('[data-sales-status]').forEach(b=>b.onclick=()=>{state.more.salesStatus=b.dataset.salesStatus;loadSales().then(renderApp)});qsa('[data-sale]').forEach(el=>el.onclick=e=>{if(e.target.closest('[data-actions]'))return;openSale(el.dataset.sale)});qsa('[data-sale] [data-actions]').forEach(b=>b.onclick=e=>{e.stopPropagation();const el=b.closest('[data-sale]');openSaleActions(el.dataset.sale)});qsel('#newSale')?.addEventListener('click',()=>dialog('New Sale','New Sale remains visible, but the PWA will not write a partial/incomplete invoice. Use native Mobile/Desktop for full create until the complete web line-item editor is validated.',[{label:'Close'}]))}
+function bindBank(){qsa('[data-bank-mode]').forEach(b=>b.onclick=()=>{state.bank.mode=b.dataset.bankMode;state.bank.batch=null;state.bank.transactions=null;loadBank().then(renderApp)});qsel('#backBankBatches')?.addEventListener('click',()=>{state.bank.batch=null;state.bank.transactions=null;loadBank().then(renderApp)});const bb=()=>{state.more.bankBatchQ=qsel('#bankBatchQ')?.value.trim()||'';loadBank().then(renderApp)};qsel('#bankBatchQGo')?.addEventListener('click',bb);const bt=()=>{state.more.bankTxnQ=qsel('#bankTxnQ')?.value.trim()||'';loadBank().then(renderApp)};qsel('#bankTxnQGo')?.addEventListener('click',bt);const fq=()=>{state.more.financeQ=qsel('#financeQ')?.value.trim()||'';loadBank().then(renderApp)};qsel('#financeQGo')?.addEventListener('click',fq);qsa('[data-bank-status]').forEach(b=>b.onclick=()=>{state.more.bankStatus=b.dataset.bankStatus;loadBank().then(renderApp)});qsa('[data-bank-batch]').forEach(el=>el.onclick=()=>{state.bank.batch=(state.bank.batches?.rows||[]).find(x=>String(x.id)===el.dataset.bankBatch);loadBank().then(renderApp)});qsa('[data-bank-txn]').forEach(el=>el.onclick=e=>{if(e.target.closest('[data-actions]'))return;openBankTxn(Number(el.dataset.bankTxn))});qsa('[data-bank-txn] [data-actions]').forEach(b=>b.onclick=e=>{e.stopPropagation();openBankTxnActions(Number(b.closest('[data-bank-txn]').dataset.bankTxn))});qsa('[data-finance]').forEach(el=>el.onclick=e=>{if(e.target.closest('[data-actions]'))return;openFinance(Number(el.dataset.finance))});qsa('[data-finance] [data-actions]').forEach(b=>b.onclick=e=>{e.stopPropagation();openFinanceActions(Number(b.closest('[data-finance]').dataset.finance))})}
+function bindImport(){qsel('#importModule')?.addEventListener('change',e=>{state.more.importMode=e.target.value;renderApp()});qsel('#runImport')?.addEventListener('click',runImport)}
+function bindMore(){const sub=state.route.sub;if(!sub)return;qsa('[data-sub]').forEach(b=>b.onclick=()=>go('more',b.dataset.sub));if(sub==='purchase')bindPurchase();if(sub==='quotations')bindQuotes();if(sub.endsWith('returns'))bindReturns();if(sub==='masters')bindMasters();if(sub==='inventory')bindInventory();if(sub==='purchase-recon')bindRecon();if(sub==='communications')bindComms();if(sub==='reminders')bindReminders();if(sub==='notifications')bindNotifications();if(sub==='reports')bindReports();if(sub==='profile')bindProfile();if(sub==='admin')bindAdmin();if(sub==='sync')qsel('#syncHealth')?.addEventListener('click',checkHealth)}
+function bindPurchase(){const s=()=>{state.more.purchaseQ=qsel('#purchaseQ').value.trim();loadPurchases().then(renderApp)};qsel('#purchaseQGo')?.addEventListener('click',s);qsa('[data-purchase]').forEach(el=>el.onclick=e=>{if(e.target.closest('[data-actions]'))return;openPurchase(el.dataset.purchase)});qsa('[data-purchase] [data-actions]').forEach(b=>b.onclick=e=>{e.stopPropagation();openPurchaseActions(b.closest('[data-purchase]').dataset.purchase)});qsel('#newPurchase')?.addEventListener('click',()=>dialog('New Purchase','The complete Phase 7 Purchase editor includes line items, taxes, charges and payment controls. It remains a native/Desktop write action until the full browser editor is validated.',[{label:'Close'}]))}
+function bindQuotes(){const s=()=>{state.more.quoteQ=qsel('#quoteQ').value.trim();loadQuotes().then(renderApp)};qsel('#quoteQGo')?.addEventListener('click',s);qsa('[data-quote]').forEach(el=>el.onclick=e=>{if(e.target.closest('[data-actions]'))return;openQuote(Number(el.dataset.quote))});qsa('[data-quote] [data-actions]').forEach(b=>b.onclick=e=>{e.stopPropagation();openQuoteActions(Number(b.closest('[data-quote]').dataset.quote))})}
+function bindReturns(){const s=()=>{state.more.returnQ=qsel('#returnQ').value.trim();loadReturns(state.route.sub==='sales-returns'?'SALES':'PURCHASE').then(renderApp)};qsel('#returnQGo')?.addEventListener('click',s);qsa('[data-return]').forEach(el=>el.onclick=e=>{if(e.target.closest('[data-actions]'))return;openReturn(el.dataset.return,el.dataset.returnType)});qsa('[data-return] [data-actions]').forEach(b=>b.onclick=e=>{e.stopPropagation();const el=b.closest('[data-return]');openReturnActions(el.dataset.return,el.dataset.returnType)})}
+function bindMasters(){qsa('[data-master-mode]').forEach(b=>b.onclick=()=>{state.more.masterMode=b.dataset.masterMode;state.more.masterData=null;loadMore('masters').then(renderApp)});const s=()=>{state.more.masterQ=qsel('#masterQ').value.trim();renderApp()};qsel('#masterQGo')?.addEventListener('click',s);qsa('[data-party]').forEach(el=>el.onclick=()=>{const r=state.more.masterData.find(x=>String(x.id)===el.dataset.party);objDetails(r.name,r)});qsa('[data-lookup]').forEach(el=>el.onclick=()=>{const r=state.more.masterData.find(x=>String(x.id)===el.dataset.lookup);objDetails(r.value||'Lookup',r)})}
+function bindInventory(){const s=async()=>{state.more.itemQ=qsel('#itemQ').value.trim();state.more.inventory=await api('/api/master/items/search?q='+encodeURIComponent(state.more.itemQ)+'&limit=100');renderApp()};qsel('#itemQGo')?.addEventListener('click',s);qsa('[data-item]').forEach(el=>el.onclick=()=>{const r=(state.more.inventory||[]).find(x=>x.itemCode===el.dataset.item);objDetails(r.itemCode,r,[{label:'Close'},{label:'Stock History',run:()=>showStockHistory(r.itemCode)}])})}
+function bindRecon(){const s=()=>{state.more.reconQ=qsel('#reconQ').value.trim();loadMore('purchase-recon').then(renderApp)};qsel('#reconQGo')?.addEventListener('click',s);qsa('[data-recon]').forEach(el=>el.onclick=async()=>{const r=await api('/api/purchase-recon/records/'+el.dataset.recon);objDetails(r.reference||'Reconciliation',r)})}
+function bindComms(){qsel('#commsQGo')?.addEventListener('click',()=>{state.more.commsQ=qsel('#commsQ').value.trim();renderApp()})}
+function bindReminders(){qsel('#newReminder')?.addEventListener('click',()=>editReminder(null));qsa('[data-reminder]').forEach(el=>el.onclick=e=>{if(e.target.closest('[data-actions]'))return;const r=state.more.reminders.find(x=>String(x.id)===el.dataset.reminder);openReminderActions(r)});qsa('[data-reminder] [data-actions]').forEach(b=>b.onclick=e=>{e.stopPropagation();const id=b.closest('[data-reminder]').dataset.reminder;openReminderActions(state.more.reminders.find(x=>String(x.id)===id))})}
+function bindNotifications(){qsel('#readAll')?.addEventListener('click',async()=>{await api('/api/insights/notifications/read-all',{method:'POST'});await loadMore('notifications');renderApp()});qsa('[data-notification-actions]').forEach(b=>b.onclick=e=>{e.stopPropagation();const n=state.more.notifications.find(x=>String(x.id)===b.dataset.notificationActions);openNotificationActions(n)})}
+function bindReports(){qsel('#runReport')?.addEventListener('click',()=>{state.more.reportFilter={from:qsel('#reportFrom').value,to:qsel('#reportTo').value,type:''};loadMore('reports').then(renderApp)})}
+function bindProfile(){qsel('#profileLogout')?.addEventListener('click',logout);qsel('#editProfile')?.addEventListener('click',editProfile);qsel('#changePassword')?.addEventListener('click',changePassword)}
+function bindAdmin(){qsa('[data-admin-tab]').forEach(b=>b.onclick=()=>{state.more.adminTab=b.dataset.adminTab;renderApp()});qsa('[data-admin-user]').forEach(el=>el.onclick=()=>openAdminUser(Number(el.dataset.adminUser)))}
+
+async function openSale(invoice){const r=await api('/api/operations/sales/by-invoice?invoiceNo='+encodeURIComponent(invoice));objDetails(`Sale ${r.invoiceNo}`,r,[{label:'Close'},{label:'Actions',primary:true,run:()=>openSaleActions(invoice)}])}
+async function openSaleActions(invoice){const r=await api('/api/operations/sales/by-invoice?invoiceNo='+encodeURIComponent(invoice));const st=upper(r.documentStatus||r.paymentStatus),active=!/CANCEL|DELETE/.test(st),pendingApproval=st==='PENDING APPROVAL',outstanding=Math.max(0,Number(r.totalAmount||0)-Number(r.paidAmount||0));sheet(`Sale ${r.invoiceNo}`,[
+ {label:'View Sale',run:()=>openSale(invoice)},{label:'Activity Timeline',enabled:!!r.id,run:()=>showActivity('SALE',r.id,r.invoiceNo)},
+ {label:'Edit Sale',enabled:false,reason:'Full line-item editor is not yet safe in the PWA.'},
+ {label:'View / Record Payments',enabled:!!r.id&&active,run:()=>openPayments('SALE',r)},
+ {label:'Create Sales Return',enabled:false,reason:'Return creation requires the complete line selection editor.'},
+ {label:'PDF / Print',enabled:active&&!pendingApproval,run:()=>downloadCanonical('SALES_INVOICE',r.invoiceNo,'PDF')},
+ {label:'Excel',enabled:active&&!pendingApproval,run:()=>downloadCanonical('SALES_INVOICE',r.invoiceNo,'XLSX')},
+ {label:'Send Email',enabled:!!r.customer?.email&&active&&!pendingApproval,reason:'Customer email is not configured.',run:()=>emailDocument('SALES_INVOICE',r)},
+ {label:'WhatsApp',enabled:!!r.customer?.phone&&active&&!pendingApproval,reason:'Customer phone is not configured.',run:()=>openWhatsApp(r.customer?.phone,`Jasvi Industries Sale ${r.invoiceNo} • ${rupee(r.totalAmount)}`)},
+ {label:'Duplicate Sale',enabled:!!r.id&&can('SALES','CREATE'),run:()=>confirmWrite('Duplicate Sale',`Create a duplicate of ${r.invoiceNo} in UAT?`,async()=>{const x=await api(`/api/support/sales/${r.id}/duplicate?user=${encodeURIComponent(state.user?.username||'PWA')}`,{method:'POST'});toast(`Duplicated as ${x.value||''}`);await loadSales();renderApp()})},
+ {label:'Approve',enabled:pendingApproval&&isAdmin(),run:()=>saleLifecycle(r,'approve')},{label:'Reject',destructive:true,enabled:pendingApproval&&isAdmin(),run:()=>rejectDoc('sale',r)},
+ {label:'Cancel Sale',destructive:true,enabled:active&&outstanding>=Number(r.totalAmount||0)-0.005&&can('SALES','EDIT'),run:()=>saleLifecycle(r,'cancel')},
+ {label:'Delete Sale',destructive:true,enabled:active&&outstanding>=Number(r.totalAmount||0)-0.005&&can('SALES','DELETE'),run:()=>deleteSale(r)}
+])}
+async function saleLifecycle(r,action){confirmWrite(`${action[0].toUpperCase()+action.slice(1)} Sale`,`${action} ${r.invoiceNo} in UAT?`,async()=>{await api(`/api/operations/sales/${action}?invoiceNo=${encodeURIComponent(r.invoiceNo)}`,{method:'POST'});toast(`Sale ${action}d`);await loadSales();renderApp()})}
+function rejectDoc(type,r){formDialog(`Reject ${type==='sale'?'Sale':'Purchase'}`,[{id:'reason',label:'Reason',required:true}],async v=>{const base=type==='sale'?'/api/operations/sales/reject':'/api/operations/purchases/reject';await api(`${base}?invoiceNo=${encodeURIComponent(r.invoiceNo)}&reason=${encodeURIComponent(v.reason)}`,{method:'POST'});toast('Rejected');type==='sale'?await loadSales():await loadPurchases();renderApp()},{submit:'Reject',danger:true})}
+function deleteSale(r){confirmWrite('Delete Sale',`Delete ${r.invoiceNo}? This changes UAT data.`,async()=>{await api('/api/operations/sales?invoiceNo='+encodeURIComponent(r.invoiceNo),{method:'DELETE'});toast('Sale deleted');await loadSales();renderApp()})}
+
+async function openPurchase(invoice){const r=await api('/api/operations/purchases/by-invoice?invoiceNo='+encodeURIComponent(invoice));objDetails(`Purchase ${r.invoiceNo}`,r,[{label:'Close'},{label:'Actions',primary:true,run:()=>openPurchaseActions(invoice)}])}
+async function openPurchaseActions(invoice){const r=await api('/api/operations/purchases/by-invoice?invoiceNo='+encodeURIComponent(invoice));const st=upper(r.documentStatus||r.paymentStatus),active=!/CANCEL|DELETE/.test(st),pendingApproval=st==='PENDING APPROVAL',outstanding=Math.max(0,Number(r.totalAmount||0)-Number(r.paidAmount||0));sheet(`Purchase ${r.invoiceNo}`,[
+ {label:'View Purchase',run:()=>openPurchase(invoice)},{label:'Activity Timeline',enabled:!!r.id,run:()=>showActivity('PURCHASE',r.id,r.invoiceNo)},{label:'Edit Purchase',enabled:false,reason:'Full line-item editor is not yet safe in the PWA.'},{label:'View / Record Payments',enabled:!!r.id&&active,run:()=>openPayments('PURCHASE',r)},{label:'Create Purchase Return',enabled:false,reason:'Return creation requires the complete line selection editor.'},{label:'PDF / Print',enabled:active&&!pendingApproval,run:()=>downloadCanonical('PURCHASE_INVOICE',r.invoiceNo,'PDF')},{label:'Excel',enabled:active&&!pendingApproval,run:()=>downloadCanonical('PURCHASE_INVOICE',r.invoiceNo,'XLSX')},{label:'Send Email',enabled:!!r.supplier?.email&&active&&!pendingApproval,run:()=>emailDocument('PURCHASE_INVOICE',r)},{label:'WhatsApp',enabled:!!r.supplier?.phone&&active&&!pendingApproval,run:()=>openWhatsApp(r.supplier?.phone,`Jasvi Industries Purchase ${r.invoiceNo} • ${rupee(r.totalAmount)}`)},{label:'Duplicate Purchase',enabled:false,reason:'Full Purchase editor is required to duplicate safely.'},{label:'Approve',enabled:pendingApproval&&isAdmin(),run:()=>purchaseLifecycle(r,'approve')},{label:'Reject',destructive:true,enabled:pendingApproval&&isAdmin(),run:()=>rejectDoc('purchase',r)},{label:'Cancel Purchase',destructive:true,enabled:active&&outstanding>=Number(r.totalAmount||0)-0.005&&can('PURCHASE','EDIT'),run:()=>purchaseLifecycle(r,'cancel')},{label:'Delete Purchase',destructive:true,enabled:active&&outstanding>=Number(r.totalAmount||0)-0.005&&can('PURCHASE','DELETE'),run:()=>deletePurchase(r)}])}
+async function purchaseLifecycle(r,action){confirmWrite(`${action} Purchase`,`${action} ${r.invoiceNo} in UAT?`,async()=>{await api(`/api/operations/purchases/${action}?invoiceNo=${encodeURIComponent(r.invoiceNo)}`,{method:'POST'});toast(`Purchase ${action}d`);await loadPurchases();renderApp()})}
+async function deletePurchase(r){confirmWrite('Delete Purchase',`Delete ${r.invoiceNo}? This changes UAT data.`,async()=>{await api('/api/operations/purchases?invoiceNo='+encodeURIComponent(r.invoiceNo),{method:'DELETE'});toast('Purchase deleted');await loadPurchases();renderApp()})}
+
+async function showActivity(type,id,title){const rows=await api(`/api/support/activity?type=${encodeURIComponent(type)}&id=${id}`);dialog(`${title} Activity`,`<div class="timeline">${rows.map(x=>`<div><b>${esc(x.action)}</b><span>${esc(x.detail||'')}</span><small>${esc(x.createdAt||'')} • ${esc(x.createdBy||'')}</small></div>`).join('')||'<p>No activity recorded.</p>'}</div>`,[{label:'Close'}],true)}
+async function openPayments(type,r){const rows=await api(`/api/support/payments?type=${type}&id=${r.id}`);const html=`<div class="list">${rows.map(x=>recordCard({id:String(x.id),title:`${x.date} • ${x.mode}`,sub:x.reference||x.receivedFrom,meta:x.notes,amount:x.amount,status:x.paymentType,actions:false})).join('')||empty('No payments')}</div>`;dialog(`${r.invoiceNo} Payments`,html,[{label:'Close'},{label:'Record Payment',primary:true,run:()=>recordPayment(type,r)}],true)}
+function recordPayment(type,r){const due=Math.max(0,Number(r.totalAmount||0)-Number(r.paidAmount||0));formDialog(`Record Payment • ${r.invoiceNo}`,[{id:'date',label:'Date',type:'date',required:true,value:today()},{id:'amount',label:`Amount (max ${due.toFixed(2)})`,type:'number',step:'0.01',required:true,value:due.toFixed(2)},{id:'mode',label:'Payment Mode',required:true},{id:'reference',label:'Reference'},{id:'notes',label:'Notes'},{id:'receivedFrom',label:'Received From / Paid To'}],async v=>{const amount=Number(v.amount);if(amount<=0||amount>due+0.005)throw new Error(`Amount must be between 0 and ${due.toFixed(2)}`);await api('/api/support/payments/with-id',{method:'POST',body:{documentType:type,documentId:r.id,date:v.date,amount,mode:v.mode,reference:v.reference,notes:v.notes,receivedFrom:v.receivedFrom,paymentType:Math.abs(amount-due)<0.005?'FULL':'PARTIAL',createdBy:state.user?.username||'PWA'}});toast('Payment recorded');type==='SALE'?await loadSales():await loadPurchases();renderApp()})}
+
+async function downloadCanonical(type,number,format){try{const {blob,disposition}=await apiBlob(`/api/documents/render?type=${encodeURIComponent(type)}&number=${encodeURIComponent(number)}&format=${encodeURIComponent(format)}`);const ext=format==='XLSX'?'xlsx':'pdf',name=`${type}-${number}.${ext}`.replace(/[^A-Za-z0-9._-]+/g,'_');const file=new File([blob],name,{type:blob.type||'application/octet-stream'});if(navigator.canShare?.({files:[file]})){await navigator.share({files:[file],title:name});return}const u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),20000)}catch(e){toast(e.message,'error')}}
+async function emailDocument(type,r){const party=r.customer||r.supplier||{};formDialog(`Email ${r.invoiceNo}`,[{id:'recipient',label:'Recipient',required:true,value:party.email||''},{id:'subject',label:'Subject',required:true,value:`Jasvi Industries ${r.invoiceNo}`},{id:'body',label:'Message',required:true,value:`Please find ${r.invoiceNo} attached.`}],async v=>{const {blob}=await apiBlob(`/api/documents/render?type=${encodeURIComponent(type)}&number=${encodeURIComponent(r.invoiceNo)}&format=PDF`);const buf=new Uint8Array(await blob.arrayBuffer());let bin='';for(let i=0;i<buf.length;i+=0x8000)bin+=String.fromCharCode(...buf.subarray(i,i+0x8000));await api('/api/authority/email',{method:'POST',body:{recipient:v.recipient,subject:v.subject,body:v.body,attachmentName:`${r.invoiceNo}.pdf`,attachmentBase64:btoa(bin)}});toast('Email sent')},{submit:'Send Email'})}
+function openWhatsApp(phone,text){const digits=String(phone||'').replace(/\D/g,'');if(!digits)return toast('Phone is not configured','error');window.open(`https://wa.me/${digits}?text=${encodeURIComponent(text)}`,'_blank','noopener')}
+
+async function openQuote(id){const r=await api(`/api/quotations/${id}`);objDetails(`Quotation ${r.no}`,r,[{label:'Close'},{label:'Actions',primary:true,run:()=>openQuoteActions(id)}])}
+async function openQuoteActions(id){const r=await api(`/api/quotations/${id}`);const st=upper(r.status),converted=!!r.converted,terminal=/REJECT|EXPIRED|DELETE/.test(st),mutable=!converted&&!terminal;sheet(`Quotation ${r.no}`,[{label:'View Quotation',run:()=>openQuote(id)},{label:'Activity Timeline',run:()=>showActivity('QUOTATION',id,r.no)},{label:'Edit Quotation',enabled:false,reason:'Full quotation line editor is not yet safe in the PWA.'},{label:'Convert to Sale',enabled:mutable&&can('SALES','CREATE'),run:()=>quoteAction(r,'convert')},{label:'Open Converted Sale',enabled:converted&&!!r.converted,run:()=>openResolved('SALES',r.converted)},{label:'PDF / Print',run:()=>printObject(`Quotation ${r.no}`,r)},{label:'Excel',run:()=>downloadCsv(`Quotation-${r.no}.csv`,r)},{label:'Send Email',enabled:!!r.email,run:()=>window.location.href=`mailto:${encodeURIComponent(r.email)}?subject=${encodeURIComponent('Quotation '+r.no)}`},{label:'WhatsApp',enabled:!!r.phone,run:()=>openWhatsApp(r.phone,`Jasvi Industries Quotation ${r.no} • ${rupee(r.amount)}`)},{label:'Duplicate Quotation',enabled:mutable,run:()=>quoteAction(r,'duplicate')},{label:'Follow-up',enabled:mutable,run:()=>quoteFollowUp(r)},{label:'Notes',enabled:mutable,run:()=>quoteNotes(r)},{label:'Delete Quotation',destructive:true,enabled:mutable&&can('QUOTATION','DELETE'),run:()=>deleteQuote(r)}])}
+async function quoteAction(r,action){confirmWrite(`${action} Quotation`,`${action} ${r.no} in UAT?`,async()=>{const x=await api(`/api/quotations/${r.id}/${action}?user=${encodeURIComponent(state.user?.username||'PWA')}`,{method:'POST'});toast(x.value||`${action} complete`);await loadQuotes();renderApp()})}
+function quoteFollowUp(r){formDialog(`Follow-up • ${r.no}`,[{id:'date',label:'Follow-up Date',type:'date',required:true,value:today()},{id:'notes',label:'Notes'}],async v=>{await api(`/api/quotations/${r.id}/follow-up`,{method:'POST',body:{date:v.date,notes:v.notes}});toast('Follow-up saved');await loadQuotes();renderApp()})}
+function quoteNotes(r){formDialog(`Notes • ${r.no}`,[{id:'value',label:'Notes',required:true,value:r.remarks||''}],async v=>{await api(`/api/quotations/${r.id}/notes`,{method:'PUT',body:{value:v.value}});toast('Notes saved');await loadQuotes();renderApp()})}
+function deleteQuote(r){confirmWrite('Delete Quotation',`Delete ${r.no} in UAT?`,async()=>{await api(`/api/quotations/${r.id}`,{method:'DELETE'});toast('Quotation deleted');await loadQuotes();renderApp()})}
+
+async function openReturn(no,type){const r=await api('/api/returns/'+encodeURIComponent(no));objDetails(`${type==='SALES'?'Sales':'Purchase'} Return ${r.no}`,r,[{label:'Close'},{label:'Actions',primary:true,run:()=>openReturnActions(no,type)}])}
+async function openReturnActions(no,type){const r=await api('/api/returns/'+encodeURIComponent(no));const st=upper(r.status),pending=st.includes('PENDING'),approved=st==='APPROVED',terminal=/CANCEL|DELETE|REJECT/.test(st),remaining=Math.max(0,Number(r.total||0)-Number(r.refund||0));sheet(`${type==='SALES'?'Sales':'Purchase'} Return ${r.no}`,[{label:'View Return',run:()=>openReturn(no,type)},{label:'PDF / Print',run:()=>printObject(`Return ${r.no}`,r)},{label:'Excel',run:()=>downloadCsv(`Return-${r.no}.csv`,r)},{label:'Open Original',run:()=>openResolved(type==='SALES'?'SALES':'PURCHASE',r.invoice)},{label:'Approve Return',enabled:pending,run:()=>returnAction(r,type,'approve')},{label:'Reject Return',destructive:true,enabled:pending,run:()=>rejectReturn(r,type)},{label:'Record Refund',enabled:approved&&remaining>0.005,run:()=>recordRefund(r,type)},{label:'Edit Notes / Reason',enabled:!terminal,run:()=>editReturn(r,type)},{label:'Attachment',enabled:!terminal,run:()=>returnAttachment(r,type)},{label:'Cancel Return',destructive:true,enabled:!terminal&&Number(r.refund||0)<=0.005,run:()=>returnAction(r,type,'cancel')},{label:'Delete Return',destructive:true,enabled:!terminal&&Number(r.refund||0)<=0.005,run:()=>deleteReturn(r,type)}])}
+async function returnAction(r,type,action){confirmWrite(`${action} Return`,`${action} ${r.no} in UAT?`,async()=>{const path=action==='cancel'?`/api/returns/${encodeURIComponent(r.no)}/cancel?sales=${type==='SALES'}`:`/api/returns/${encodeURIComponent(r.no)}/${action}`;await api(path,{method:'POST'});toast(`Return ${action} complete`);await loadReturns(type);renderApp()})}
+function rejectReturn(r,type){formDialog(`Reject Return ${r.no}`,[{id:'reason',label:'Reason',required:true}],async v=>{await api(`/api/returns/${encodeURIComponent(r.no)}/reject?reason=${encodeURIComponent(v.reason)}`,{method:'POST'});toast('Return rejected');await loadReturns(type);renderApp()},{submit:'Reject',danger:true})}
+function recordRefund(r,type){const remaining=Math.max(0,Number(r.total||0)-Number(r.refund||0));formDialog(`Refund ${r.no}`,[{id:'date',label:'Refund Date',type:'date',required:true,value:today()},{id:'amount',label:`Amount (max ${remaining.toFixed(2)})`,type:'number',step:'0.01',required:true,value:remaining.toFixed(2)},{id:'mode',label:'Payment Mode',required:true},{id:'reference',label:'Reference'},{id:'bankAccount',label:'Bank Account'},{id:'notes',label:'Notes'}],async v=>{const amount=Number(v.amount);if(amount<=0||amount>remaining+0.005)throw new Error('Invalid refund amount');await api(`/api/returns/${encodeURIComponent(r.no)}/refunds`,{method:'POST',body:{date:v.date,amount,mode:v.mode,reference:v.reference,bankAccount:v.bankAccount,refundedParty:r.party,notes:v.notes,refundType:Math.abs(amount-remaining)<0.005?'FULL':'PARTIAL',createdBy:state.user?.username||'PWA'}});toast('Refund recorded');await loadReturns(type);renderApp()})}
+function editReturn(r,type){formDialog(`Edit ${r.no}`,[{id:'field',label:'Field',type:'select',options:['notes','reason']},{id:'value',label:'Value',required:true,value:r.notes||''}],async v=>{await api(`/api/returns/${encodeURIComponent(r.no)}`,{method:'PUT',body:{field:v.field,value:v.value}});toast('Return updated');await loadReturns(type);renderApp()})}
+function returnAttachment(r,type){const inp=document.createElement('input');inp.type='file';inp.onchange=async()=>{const f=inp.files[0];if(!f)return;const data=await f.arrayBuffer();await api(`/api/support/returns/${encodeURIComponent(r.no)}/attachment-file?filename=${encodeURIComponent(f.name)}`,{method:'PUT',body:data,headers:{'Content-Type':'application/octet-stream'}});toast('Return attachment uploaded');await loadReturns(type);renderApp()};inp.click()}
+function deleteReturn(r,type){confirmWrite('Delete Return',`Delete ${r.no} in UAT?`,async()=>{await api(`/api/returns/${encodeURIComponent(r.no)}?sales=${type==='SALES'}`,{method:'DELETE'});toast('Return deleted');await loadReturns(type);renderApp()})}
+
+async function openFinance(id){const r=await api('/api/operations/finance/'+id);objDetails(`Finance ${r.voucherNo}`,r,[{label:'Close'},{label:'Actions',primary:true,run:()=>openFinanceActions(id)}])}
+async function openFinanceActions(id){const r=await api('/api/operations/finance/'+id);sheet(`Finance ${r.voucherNo}`,[{label:'View Finance Entry',run:()=>openFinance(id)},{label:'Edit Finance Entry',enabled:false,reason:r.reconciled?'Reconciled entries are locked.':'Full finance editor is not yet safe in PWA.'},{label:'Open Linked ERP',enabled:!!r.linkedDocumentNo,run:()=>openResolved(r.linkedTargetType||'FINANCE',r.linkedDocumentNo)},{label:'Delete Finance Entry',destructive:true,enabled:!r.reconciled&&can('BANK_EXPENSE','DELETE'),run:()=>confirmWrite('Delete Finance Entry',`Delete ${r.voucherNo}?`,async()=>{await api(`/api/operations/finance/${r.id}?rowVersion=${r.rowVersion}`,{method:'DELETE'});toast('Finance entry deleted');await loadBank();renderApp()})}])}
+async function openBankTxn(id){const r=(state.bank.transactions?.rows||[]).find(x=>Number(x.id)===Number(id));if(r)objDetails('Bank Transaction',r,[{label:'Close'},{label:'Actions',primary:true,run:()=>openBankTxnActions(id)}])}
+async function openBankTxnActions(id){const r=(state.bank.transactions?.rows||[]).find(x=>Number(x.id)===Number(id));if(!r)return;sheet(`Bank Transaction • ${r.transactionDate||''}`,[{label:'View / Reconcile',run:()=>openBankTxn(id)},{label:'Suggest Matches',run:async()=>{const rows=await api(`/api/bank-statements/transactions/${id}/suggest`,{method:'POST'});dialog('Suggested Matches',`<div class="list">${rows.map(x=>recordCard({id:String(x.id),title:x.documentNo,sub:x.partyName,meta:`${x.documentDate} • Confidence ${Math.round((x.confidence||0)*100)}%`,amount:x.outstanding,status:x.type,actions:false})).join('')||empty('No matches')}</div>`,[{label:'Close'}],true)}},{label:'Add Note',run:()=>bankNote(id,'note')},{label:'Mark for Review',run:()=>bankNote(id,'review')},{label:'Ignore',destructive:true,run:()=>bankNote(id,'ignore')},{label:'Bank Audit Trail',run:()=>bankAudit(id)},{label:'Reverse Match',destructive:true,enabled:upper(r.status)==='MATCHED',run:()=>confirmWrite('Reverse Bank Match','Reverse this reconciliation in UAT?',async()=>{await api(`/api/bank-statements/transactions/${id}/reverse?user=${encodeURIComponent(state.user?.username||'PWA')}`,{method:'POST'});toast('Reversed');await loadBank();renderApp()})}])}
+function bankNote(id,kind){formDialog(kind==='ignore'?'Ignore Transaction':kind==='review'?'Mark for Review':'Bank Note',[{id:'note',label:'Note',required:true}],async v=>{const user=state.user?.username||'PWA';const body={note:v.note,user};await api(`/api/bank-statements/transactions/${id}/${kind}`,{method:'POST',body});toast('Bank action saved');await loadBank();renderApp()},{submit:kind==='ignore'?'Ignore':'Save',danger:kind==='ignore'})}
+async function bankAudit(id){const rows=await api(`/api/bank-statements/transactions/${id}/audit`);dialog('Bank Audit Trail',`<div class="timeline">${rows.map(x=>`<div><b>${esc(x.eventType)}</b><span>${esc(x.detail)}</span><small>${esc(x.createdAt)} • ${esc(x.performedBy)}</small></div>`).join('')}</div>`,[{label:'Close'}],true)}
+
+function editReminder(r){formDialog(r?'Edit Reminder':'New Reminder',[{id:'title',label:'Title',required:true},{id:'referenceNo',label:'Reference No'},{id:'dueDate',label:'Due Date',type:'date',required:true,value:today()},{id:'priority',label:'Priority',type:'select',options:['LOW','MEDIUM','HIGH']},{id:'notes',label:'Notes'}],async v=>{const body={...v,id:r?.id||null,status:r?.status||'OPEN',createdBy:r?.createdBy||state.user?.username||'PWA',snoozedUntil:r?.snoozedUntil||null};if(r)await api(`/api/insights/reminders/${r.id}`,{method:'PUT',body});else await api('/api/insights/reminders',{method:'POST',body});toast('Reminder saved');await loadMore('reminders');renderApp()},{values:r||{}})}
+function openReminderActions(r){sheet(r.title,[{label:'Edit Reminder',run:()=>editReminder(r)},{label:'Mark Done',enabled:upper(r.status)!=='DONE',run:()=>reminderStatus(r,'DONE')},{label:'Reopen',enabled:upper(r.status)==='DONE',run:()=>reminderStatus(r,'OPEN')},{label:'Snooze 1 Day',run:()=>{const d=new Date();d.setDate(d.getDate()+1);reminderStatus(r,'SNOOZED',d.toISOString().slice(0,10))}},{label:'Delete Reminder',destructive:true,run:()=>confirmWrite('Delete Reminder',`Delete ${r.title}?`,async()=>{await api(`/api/insights/reminders/${r.id}`,{method:'DELETE'});await loadMore('reminders');renderApp()})}])}
+async function reminderStatus(r,status,snoozedUntil=''){await api(`/api/insights/reminders/${r.id}/status?status=${encodeURIComponent(status)}${snoozedUntil?`&snoozedUntil=${encodeURIComponent(snoozedUntil)}`:''}`,{method:'POST'});await loadMore('reminders');renderApp()}
+function openNotificationActions(n){sheet(n.title,[{label:n.read?'Mark Unread':'Mark Read',run:async()=>{await api(`/api/insights/notifications/${n.id}/${n.read?'unread':'read'}`,{method:'POST'});await loadMore('notifications');renderApp()}},{label:'Open Linked Record',enabled:!!n.moduleKey&&!!n.referenceNo,run:()=>openResolved(n.moduleKey,n.referenceNo)},{label:'Delete Notification',destructive:true,run:async()=>{await api(`/api/insights/notifications/${n.id}`,{method:'DELETE'});await loadMore('notifications');renderApp()}}])}
+
+function editProfile(){const p=state.more.profile||state.user||{};formDialog('Edit Profile',[{id:'fullName',label:'Full Name',required:true},{id:'email',label:'Email',required:true},{id:'department',label:'Department'},{id:'branch',label:'Branch'}],async v=>{state.more.profile=await api('/api/profile',{method:'PUT',body:v});state.user={...state.user,...state.more.profile};toast('Profile updated');renderApp()},{values:p})}
+function changePassword(){formDialog('Change Password',[{id:'currentPassword',label:'Current Password',type:'password',required:true},{id:'password',label:'New Password',type:'password',required:true},{id:'confirm',label:'Confirm New Password',type:'password',required:true}],async v=>{if(v.password!==v.confirm)throw new Error('New passwords do not match');await api('/api/auth/password',{method:'POST',body:{userId:state.user?.id||0,currentPassword:v.currentPassword,password:v.password}});toast('Password changed')},{submit:'Change Password'})}
+function openAdminUser(id){const r=state.more.admin.users.find(x=>x.id===id);sheet(r.fullName||r.username,[{label:'View User',run:()=>objDetails(r.username,r)},{label:r.locked?'Unlock User':'Lock User',destructive:!r.locked,run:()=>confirmWrite(r.locked?'Unlock User':'Lock User',`${r.locked?'Unlock':'Lock'} ${r.username}?`,async()=>{await api(`/api/admin/users/${r.id}/lock`,{method:'POST',body:{locked:!r.locked}});await loadMore('admin');renderApp()})}])}
+
+async function openResolved(module,reference){module=upper(module);if(module.includes('SALE')&&!module.includes('RETURN')){go('sales');setTimeout(()=>openSale(reference),50);return}if(module.includes('PURCHASE')&&!module.includes('RETURN')&&!module.includes('RECON')){go('more','purchase');setTimeout(()=>openPurchase(reference),50);return}if(module.includes('QUOT')){go('more','quotations');return}if(module.includes('SALES_RETURN')){go('more','sales-returns');setTimeout(()=>openReturn(reference,'SALES'),50);return}if(module.includes('PURCHASE_RETURN')){go('more','purchase-returns');setTimeout(()=>openReturn(reference,'PURCHASE'),50);return}if(module.includes('BANK')||module.includes('FINANCE')){go('bank');return}const r=await api(`/api/support/resolve-record?moduleKey=${encodeURIComponent(module)}&reference=${encodeURIComponent(reference)}`).catch(()=>null);if(r?.found)toast(`Record resolved: ${r.moduleKey} ${r.reference}`);else toast(`Unable to route ${module} ${reference}`,'error')}
+
+function openGlobalSearch(){const wrap=document.createElement('div');wrap.className='modal-backdrop';wrap.innerHTML=`<div class="dialog search-dialog"><h2>Global Search</h2><div class="search"><span>${icon('search')}</span><input id="globalQ" placeholder="Invoice, party, item, payment, return, bank…" autofocus><button id="globalGo">Search</button></div><div id="globalResult"><div class="state-card"><strong>Search Jasvi Industries</strong><span>Type at least 2 characters.</span></div></div><div class="dialog-actions"><button class="secondary" id="globalClose">Close</button></div></div>`;document.body.appendChild(wrap);wrap.querySelector('#globalClose').onclick=()=>wrap.remove();const run=async()=>{const q=wrap.querySelector('#globalQ').value.trim(),out=wrap.querySelector('#globalResult');if(q.length<2){out.innerHTML=empty('Type at least 2 characters');return}out.innerHTML=loading('Searching ERP…');try{const rows=await api('/api/support/search?q='+encodeURIComponent(q));out.innerHTML=`<div class="list">${rows.map((r,i)=>recordCard({id:String(i),title:r.reference||r.description,sub:r.description||r.module,meta:r.detail,status:r.module,attrs:`data-global-result="${i}"`})).join('')||empty('No matching ERP records')}</div>`;out.querySelectorAll('[data-global-result]').forEach(el=>el.onclick=()=>{const r=rows[+el.dataset.globalResult];wrap.remove();openResolved(r.moduleKey||r.module,r.reference)})}catch(e){out.innerHTML=empty('Search failed',e.message)}};wrap.querySelector('#globalGo').onclick=run;wrap.querySelector('#globalQ').onkeydown=e=>{if(e.key==='Enter')run()}}
+
+function printObject(title,obj){const w=window.open('','_blank');if(!w)return toast('Pop-up blocked','error');w.document.write(`<html><head><title>${esc(title)}</title><style>body{font-family:Arial;padding:32px}h1{font-size:22px}table{border-collapse:collapse;width:100%}td{border-bottom:1px solid #ddd;padding:8px}td:first-child{font-weight:bold;width:34%}</style></head><body><h1>${esc(title)}</h1><table>${Object.entries(obj||{}).filter(([,v])=>!Array.isArray(v)&&typeof v!=='object').map(([k,v])=>`<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</table><script>window.print()<\/script></body></html>`);w.document.close()}
+function downloadCsv(name,obj){const rows=Object.entries(obj||{}).filter(([,v])=>!Array.isArray(v)&&typeof v!=='object'),csv='Field,Value\n'+rows.map(([k,v])=>`"${String(k).replace(/"/g,'""')}","${String(v??'').replace(/"/g,'""')}"`).join('\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
+async function showStockHistory(code){const rows=await api('/api/operations/stock/history?itemCode='+encodeURIComponent(code));dialog(`${code} Stock History`,`<div class="list">${rows.map(r=>recordCard({id:'',title:r.type,sub:r.reason,meta:`${r.date} • ${r.reference} • ${r.user}`,amount:r.quantity,status:r.type,actions:false})).join('')||empty('No stock history')}</div>`,[{label:'Close'}],true)}
+
+async function runImport(){const file=qsel('#importFile')?.files?.[0],module=qsel('#importModule').value,dry=qsel('#dryRun').checked,out=qsel('#importResult');if(!file){out.innerHTML='<div class="error-text">Select a CSV file first.</div>';return}if(module!=='BANK'){out.innerHTML='<div class="info-card"><b>Module selected</b><span>The Phase 6 native importer supports this module, but this PWA currently executes only Bank Statement imports because the other modules require the complete field-mapping and validation editor. No data was written.</span></div>';return}const bankName=qsel('#bankName')?.value.trim(),bankAccount=qsel('#bankAccount')?.value.trim();if(!bankName||!bankAccount){out.innerHTML='<div class="error-text">Bank Name and Bank Account are required.</div>';return}try{out.innerHTML=loading('Processing import…');const text=await file.text(),rows=parseCsv(text).map((r,i)=>toBankRow(r,i));if(!rows.length)throw new Error('CSV has no data rows');const dates=rows.map(r=>r.transactionDate).filter(Boolean).sort();const req={bankName,bankAccount,accountHolder:qsel('#bankHolder')?.value.trim()||'',statementFrom:dates[0]||'',statementTo:dates.at(-1)||'',currency:qsel('#bankCurrency')?.value||'INR',openingBalance:null,closingBalance:null,sourceFingerprint:hashText(file.name+'|'+text),sourceFileName:file.name,sourceCsv:text,importedBy:state.user?.username||'PWA',dryRun:dry,rows};const exec=async()=>{const r=await api('/api/bank-statements/imports',{method:'POST',body:req});out.innerHTML=`<div class="info-card"><b>${dry?'Dry run complete':'Import complete'}</b><span>${r.importedRows||0} imported • ${r.duplicateRows||0} duplicate${r.alreadyImported?' • Already imported':''}</span></div>`;state.bank.batches=null};if(dry)await exec();else confirmWrite('Import Bank Statement',`Write ${file.name} to UAT ERP?`,exec)}catch(e){out.innerHTML=`<div class="error-text">${esc(e.message)}</div>`}}
+function parseCsv(text){const lines=[];let row=[],cell='',quote=false;for(let i=0;i<text.length;i++){const ch=text[i],n=text[i+1];if(ch==='"'){if(quote&&n==='"'){cell+='"';i++}else quote=!quote}else if(ch===','&&!quote){row.push(cell);cell=''}else if((ch==='\n'||ch==='\r')&&!quote){if(ch==='\r'&&n==='\n')i++;row.push(cell);cell='';if(row.some(x=>x.trim()!==''))lines.push(row);row=[]}else cell+=ch}if(cell||row.length){row.push(cell);lines.push(row)}if(lines.length<2)return[];const h=lines[0].map(x=>x.trim().toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,''));return lines.slice(1).map(cols=>Object.fromEntries(h.map((k,i)=>[k,(cols[i]||'').trim()]))) }
+function num(v){return Number(String(v??'0').replace(/,/g,''))||0}function toBankRow(r,i){const amount=num(r.amount),dir=upper(r.direction);const debit=r.debit!==undefined?num(r.debit):(dir.startsWith('D')||amount<0?Math.abs(amount):0),credit=r.credit!==undefined?num(r.credit):(dir.startsWith('C')||amount>0?Math.abs(amount):0);return {sourceRowNumber:i+2,transactionTimestamp:r.transaction_timestamp||'',transactionDate:r.transaction_date||r.date||r.txn_date||'',valueDate:r.value_date||'',description:r.description||r.narration||r.details||'',reference:r.reference||r.ref||r.reference_no||'',debit,credit,balance:num(r.balance),transactionFingerprint:hashText(i+'|'+JSON.stringify(r))}}
+function hashText(s){let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)}return (h>>>0).toString(16)}
+
+async function checkHealth(){try{const h=await api('/api/runtime/health',{auth:false});state.online=true;dialog('ERP Health',`Version ${h.version||''}\nEnvironment ${h.environment||''}\nDatabase ${h.databaseName||''}\nReady ${h.ready}`,[{label:'OK'}]);renderApp()}catch(e){state.online=false;toast(e.message,'error');renderApp()}}
+function toast(message,kind='ok'){const t=document.createElement('div');t.className=`toast ${kind}`;t.textContent=message;document.body.appendChild(t);setTimeout(()=>t.classList.add('show'),20);setTimeout(()=>{t.classList.remove('show');setTimeout(()=>t.remove(),250)},3200)}
+
+window.addEventListener('hashchange',()=>{if(!state.token)return;state.route=parseHash();renderApp();loadCurrent()});
+window.addEventListener('online',()=>{state.online=true;renderApp()});window.addEventListener('offline',()=>{state.online=false;renderApp()});
+if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js').then(reg=>{reg.update();reg.addEventListener('updatefound',()=>{const w=reg.installing;w?.addEventListener('statechange',()=>{if(w.state==='installed'&&navigator.serviceWorker.controller)toast('New PWA version installed. Reopen the app to use it.')})})}).catch(()=>{})}
+
+(async()=>{state.route=parseHash();if(state.token){try{await bootstrap();renderApp();await loadCurrent();renderApp()}catch(e){tokenStore('',false);renderLogin(e.message)}}else renderLogin()})();
 })();
