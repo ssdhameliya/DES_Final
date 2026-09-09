@@ -31,11 +31,14 @@ jobs:
           rm -rf dist
           mkdir -p dist/icons
           cp index.html styles.css config.js manifest.webmanifest sw.js app.js dist/
-          cp icons/icon-192.svg icons/icon-512.svg icons/icon-maskable.svg dist/icons/
-          base64 --decode payload/apple-touch-icon.b64 > dist/icons/apple-touch-icon.png
+          cp icons/*.svg icons/*.png dist/icons/
           test -s dist/app.js
           test -s dist/icons/apple-touch-icon.png
           node --check dist/app.js
+          node --check dist/config.js
+          node --check dist/sw.js
+          test -s dist/icons/icon-192.png
+          test -s dist/icons/icon-512.png
           grep -q "api-uat.jasviindustries.in" dist/config.js
           grep -q "enableProdSwitch: false" dist/config.js
 
