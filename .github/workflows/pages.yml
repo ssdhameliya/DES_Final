@@ -1,8 +1,8 @@
-name: Deploy Jasvi PWA UAT
+name: Deploy UAT PWA to GitHub Pages
 
 on:
   push:
-    branches: ["main"]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -11,7 +11,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: "pages"
+  group: pages
   cancel-in-progress: true
 
 jobs:
@@ -23,35 +23,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Build static PWA artifact
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf dist
-          mkdir -p dist/icons
-          cp index.html styles.css config.js manifest.webmanifest sw.js app.js dist/
-          cp icons/*.svg icons/*.png dist/icons/
-          test -s dist/app.js
-          test -s dist/icons/apple-touch-icon.png
-          node --check dist/app.js
-          node --check dist/config.js
-          node --check dist/sw.js
-          test -s dist/icons/icon-192.png
-          test -s dist/icons/icon-512.png
-          grep -q "api-uat.jasviindustries.in" dist/config.js
-          grep -q "enableProdSwitch: false" dist/config.js
-
       - name: Configure Pages
         uses: actions/configure-pages@v5
-        with:
-          enablement: true
-
-      - name: Upload static PWA
+      - name: Upload PWA
         uses: actions/upload-pages-artifact@v3
         with:
-          path: dist
-
-      - name: Deploy to GitHub Pages
+          path: .
+      - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4

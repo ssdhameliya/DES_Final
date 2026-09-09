@@ -1,6 +1,6 @@
-const CACHE = 'jasvi-pwa-phase6-v1.2.1-ios';
+const CACHE = 'jasvi-pwa-phase6-v1.2.2-attached';
 const SHELL = [
-  'index.html', 'styles.css', 'config.js', 'app.js', 'manifest.webmanifest',
+  'index.html', 'styles.css', 'config.js', 'source-contract.js', 'source-domain.js', 'source-port-ui.js', 'app.js', 'manifest.webmanifest', 'source-provenance.json',
   'icons/icon-192.svg', 'icons/icon-512.svg', 'icons/icon-maskable.svg',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'
 ];
