@@ -23,12 +23,31 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Build static PWA artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          mkdir -p dist/icons
+          cp index.html styles.css config.js manifest.webmanifest sw.js dist/
+          cp icons/icon-192.svg icons/icon-512.svg icons/icon-maskable.svg dist/icons/
+          cat payload/app.part*.b64 | base64 --decode > dist/app.js
+          base64 --decode payload/apple-touch-icon.b64 > dist/icons/apple-touch-icon.png
+          test -s dist/app.js
+          test -s dist/icons/apple-touch-icon.png
+          node --check dist/app.js
+          grep -q "api-uat.jasviindustries.in" dist/config.js
+          grep -q "enableProdSwitch: false" dist/config.js
+
       - name: Configure Pages
         uses: actions/configure-pages@v5
+
       - name: Upload static PWA
         uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: dist
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
