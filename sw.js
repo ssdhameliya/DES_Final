@@ -1,4 +1,4 @@
-const CACHE='jasvi-pwa-shell-v1.0.0-uat.2';
+const CACHE='jasvi-pwa-shell-v1.0.1-uat.3';
 const BASE=new URL('./',self.location.href).pathname;
 const asset=p=>new URL(p,self.location.href).pathname;
 const SHELL=['./','index.html','styles.css','config.js','app.js','manifest.webmanifest','icons/icon-192.svg','icons/icon-512.svg','icons/apple-touch-icon.png','icons/icon-maskable.svg'];
