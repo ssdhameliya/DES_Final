@@ -1,4 +1,4 @@
-const CACHE = 'jasvi-pwa-phase6-v1.2.2-attached';
+const CACHE = 'jasvi-pwa-phase6-v1.2.3-github-pages';
 const SHELL = [
   'index.html', 'styles.css', 'config.js', 'source-contract.js', 'source-domain.js', 'source-port-ui.js', 'app.js', 'manifest.webmanifest', 'source-provenance.json',
   'icons/icon-192.svg', 'icons/icon-512.svg', 'icons/icon-maskable.svg',
@@ -8,7 +8,7 @@ const scope = new URL(self.registration.scope);
 const shellURLs = new Set(SHELL.map(path => new URL(path, scope).href));
 const indexURL = new URL('index.html', scope).href;
 self.addEventListener('install', event => {
-  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll([...shellURLs])));
+  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll([...shellURLs])).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', event => {
   event.waitUntil(caches.keys().then(keys => Promise.all(
