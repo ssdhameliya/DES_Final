@@ -3,13 +3,13 @@
 
 const C=window.JASVI_PWA_CONFIG;
 const root=document.getElementById('root');
-const TOKEN_KEY='jasvi.pwa.token';
-const SESSION_KEY='jasvi.pwa.session.token';
+const TOKEN_KEY='jasvi.pwa.phase6.token';
+const SESSION_KEY='jasvi.pwa.phase6.session.token';
 const state={
   token:sessionStorage.getItem(SESSION_KEY)||localStorage.getItem(TOKEN_KEY)||'',
   remember:!!localStorage.getItem(TOKEN_KEY),
   user:null,permissions:[],online:navigator.onLine,pending:0,
-  route:{main:'dashboard',sub:null}, drawer:false, loading:false,
+  route:{main:'dashboard',sub:null}, loading:false,
   dashboard:null,sales:null,purchases:null,quotes:null,returns:{SALES:null,PURCHASE:null},
   bank:{mode:'statement',batches:null,batch:null,transactions:null,finance:null,metrics:null},
   more:{}, searchOpen:false
@@ -67,7 +67,7 @@ function parseHash(){
   const main=['dashboard','sales','bank','import','more'].includes(x[0])?x[0]:'dashboard';
   return {main,sub:main==='more'?(x[1]||null):null};
 }
-function go(main,sub=null){state.route={main,sub};state.drawer=false;location.hash='#'+main+(sub?'/'+sub:'');renderApp();loadCurrent();}
+function go(main,sub=null){state.route={main,sub};location.hash='#'+main+(sub?'/'+sub:'');renderApp();loadCurrent();}
 
 function pageTitle(){
   const main={dashboard:'Dashboard',sales:'Sales',bank:'Bank Statement',import:'Data Import',more:'More'}[state.route.main]||'Jasvi Industries';
@@ -78,53 +78,64 @@ function pageTitle(){
 const MORE=[
   {id:'purchase',label:'Purchase',sub:'Bills, suppliers, payments and Purchase actions',ic:'purchase'},
   {id:'quotations',label:'Quotations',sub:'Quotes, follow-ups and conversion',ic:'quote'},
-  {id:'sales-returns',label:'Sales Returns',sub:'Return lifecycle and refunds',ic:'return'},
-  {id:'purchase-returns',label:'Purchase Returns',sub:'Supplier returns and refunds',ic:'return'},
-  {id:'masters',label:'Master Data',sub:'Customers, suppliers and lookups',ic:'masters'},
-  {id:'inventory',label:'Inventory',sub:'Items, stock and adjustments',ic:'inventory'},
-  {id:'purchase-recon',label:'Purchase Reconciliation',sub:'Supplier invoice reconciliation',ic:'recon'},
-  {id:'communications',label:'Communication Center',sub:'Email and message history',ic:'comms'},
-  {id:'reminders',label:'Reminders',sub:'Open, snooze and complete follow-ups',ic:'reminder'},
-  {id:'notifications',label:'Notifications',sub:'ERP alerts and record links',ic:'bell'},
-  {id:'reports',label:'Reports',sub:'Business reporting',ic:'report'},
-  {id:'profile',label:'Profile & Password',sub:'Account and security',ic:'profile'},
+  {id:'sales-returns',label:'Sales Returns',sub:'Customer returns and refunds',ic:'return'},
+  {id:'purchase-returns',label:'Purchase Returns',sub:'Supplier returns and adjustments',ic:'return'},
+  {id:'masters',label:'Master Data',sub:'Customers, suppliers, items and values',ic:'masters'},
+  {id:'inventory',label:'Inventory',sub:'Stock balance, location and movement',ic:'inventory'},
+  {id:'purchase-recon',label:'Purchase Reconciliation',sub:'Supplier and statement matching',ic:'recon'},
+  {id:'communications',label:'Communication Center',sub:'Email and communication history',ic:'comms'},
+  {id:'reminders',label:'Reminders',sub:'Follow-ups and due actions',ic:'reminder'},
+  {id:'notifications',label:'Notifications',sub:'Alerts and ERP updates',ic:'bell'},
+  {id:'reports',label:'Reports',sub:'Business insights and exports',ic:'report'},
+  {id:'profile',label:'Profile & Password',sub:'Profile, password and security',ic:'profile'},
   {id:'admin',label:'User Access & Roles',sub:'Users, roles and permissions',ic:'admin'},
-  {id:'import',label:'Data Import',sub:'Open full import workspace',ic:'import'},
-  {id:'sync',label:'Sync Center',sub:'Online status and local session',ic:'sync'},
-  {id:'about',label:'About',sub:'Build and compatibility',ic:'about'}
+  {id:'import',label:'Data Import',sub:'Bring business data into Jasvi Industries',ic:'import'},
+  {id:'sync',label:'Sync Center',sub:'Offline cache and sync status',ic:'sync'},
+  {id:'about',label:'About',sub:'App and environment information',ic:'about'}
 ];
+
+function canOpenMore(id){
+  if(id==='purchase')return can('PURCHASE');
+  if(id==='quotations')return can('QUOTATION');
+  if(id==='sales-returns')return can('SALES');
+  if(id==='purchase-returns')return can('PURCHASE');
+  if(id==='masters')return can('CUSTOMERS')||can('SUPPLIERS')||can('INVENTORY')||can('MASTERS')||isAdmin();
+  if(id==='inventory')return can('INVENTORY');
+  if(id==='purchase-recon')return can('PURCHASE_RECON');
+  if(id==='communications'||id==='notifications')return can('COMMUNICATION');
+  if(id==='reminders')return can('REMINDERS');
+  if(id==='reports')return can('REPORTS')||can('SALES')||can('PURCHASE');
+  if(id==='profile'||id==='sync'||id==='about')return true;
+  if(id==='admin')return isAdmin()||can('USERS');
+  if(id==='import')return can('INVENTORY','CREATE')||can('CUSTOMERS','CREATE')||can('SUPPLIERS','CREATE')||can('PURCHASE_RECON','IMPORT')||isAdmin();
+  return false;
+}
+
+function mainAllowed(id){
+  if(id==='dashboard'||id==='more')return true;
+  if(id==='sales')return can('SALES');
+  if(id==='bank')return can('BANK_EXPENSE')||can('FINANCE')||isAdmin();
+  if(id==='import')return can('INVENTORY','CREATE')||can('CUSTOMERS','CREATE')||can('SUPPLIERS','CREATE')||can('PURCHASE_RECON','IMPORT')||isAdmin();
+  return false;
+}
 
 function appShell(content){
   const active=state.route;
-  const drawerItems=[
-    ['dashboard','Dashboard','dashboard'],['sales','Sales','sales'],['bank','Bank Statement','bank'],['import','Import','import'],['more','More','more']
-  ];
-  return `<div class="app-shell ${state.drawer?'drawer-open':''}">
-    <aside class="sidebar" id="sidebar">
-      <div class="side-brand"><div class="brand-mark">JI</div><div><strong>Jasvi Industries</strong><span>ERP Mobile • UAT</span></div></div>
-      <nav class="side-nav">
-        ${drawerItems.map(([id,l,ic])=>`<button class="side-item ${active.main===id&&!active.sub?'active':''}" data-go="${id}"><span>${icon(ic)}</span><b>${l}</b></button>`).join('')}
-        <div class="side-sep">Modules</div>
-        ${MORE.filter(x=>!['import'].includes(x.id)).map(x=>`<button class="side-item ${active.main==='more'&&active.sub===x.id?'active':''}" data-sub="${x.id}"><span>${icon(x.ic)}</span><b>${esc(x.label)}</b></button>`).join('')}
-      </nav>
-      <div class="side-foot"><div class="mini-user"><strong>${esc(state.user?.fullName||state.user?.username||'ERP User')}</strong><span>${esc(state.user?.role||'')}</span></div><button class="side-logout" id="sideLogout">${icon('logout')} Sign out</button></div>
-    </aside>
-    <div class="drawer-scrim" id="drawerScrim"></div>
-    <main class="app-main">
+  const tabs=[['dashboard','Dashboard','dashboard'],['sales','Sales','sales'],['bank','Bank Statement','bank'],['import','Import','import'],['more','More','more']].filter(([id])=>mainAllowed(id));
+  return `<div class="app-shell phase6-shell"><main class="app-main">
       <header class="topbar">
-        <button class="icon-btn" id="drawerBtn" aria-label="Menu">${icon('menu')}</button>
+        <div class="brand-mark compact">JI</div>
         <div class="top-title"><strong>Jasvi Industries</strong><span>${esc(pageTitle())}</span></div>
         <button class="icon-btn" id="searchBtn" aria-label="Global Search">${icon('search')}</button>
         <button class="icon-btn" id="notifyBtn" aria-label="Notifications">${icon('bell')}</button>
-        <span class="conn-chip ${state.online?'ok':'bad'}"><i></i>${state.online?(state.pending?`${state.pending} pending`:'Online'):'Offline'}</span>
+        <span class="conn-chip ${state.online?'ok':'bad'}" title="${state.online?'Online':'Offline'}"><i></i><span>${state.online?'Online':'Offline'}</span></span>
         <button class="icon-btn top-logout" id="logoutBtn" aria-label="Logout">${icon('logout')}</button>
       </header>
       <section class="content">${content}</section>
-      <nav class="bottom-nav">
-        ${[['dashboard','Dashboard','dashboard'],['sales','Sales','sales'],['bank','Bank Statement','bank'],['import','Import','import'],['more','More','more']].map(([id,l,ic])=>`<button class="nav-item ${active.main===id?'active':''}" data-go="${id}"><span>${icon(ic)}</span><small>${l}</small></button>`).join('')}
+      <nav class="bottom-nav" style="grid-template-columns:repeat(${tabs.length},1fr)">
+        ${tabs.map(([id,l,ic])=>`<button class="nav-item ${active.main===id?'active':''}" data-go="${id}"><span>${icon(ic)}</span><small>${l}</small></button>`).join('')}
       </nav>
-    </main>
-  </div>`;
+    </main></div>`;
 }
 
 function renderApp(){
@@ -141,44 +152,66 @@ function renderApp(){
 function bindShell(){
   qsa('[data-go]').forEach(b=>b.onclick=()=>go(b.dataset.go));
   qsa('[data-sub]').forEach(b=>b.onclick=()=>go('more',b.dataset.sub));
-  qsel('#drawerBtn')?.addEventListener('click',()=>{state.drawer=!state.drawer;document.querySelector('.app-shell')?.classList.toggle('drawer-open',state.drawer)});
-  qsel('#drawerScrim')?.addEventListener('click',()=>{state.drawer=false;document.querySelector('.app-shell')?.classList.remove('drawer-open')});
   qsel('#searchBtn')?.addEventListener('click',openGlobalSearch);
-  qsel('#notifyBtn')?.addEventListener('click',()=>go('more','notifications'));
-  qsel('#logoutBtn')?.addEventListener('click',logout);qsel('#sideLogout')?.addEventListener('click',logout);
+  qsel('#notifyBtn')?.addEventListener('click',()=>{if(canOpenMore('notifications'))go('more','notifications');else toast('You do not have permission to view Notifications.','error')});
+  qsel('#logoutBtn')?.addEventListener('click',logout);
+}
+
+function renderStartup(message='Preparing your workspace…'){
+  root.innerHTML=`<div class="startup-wrap"><div class="startup-card"><div class="brand-mark startup-logo">JI</div><h1>Jasvi Industries</h1><p>ERP Mobile • UAT</p><div class="spinner"></div><span>${esc(message)}</span></div></div>`;
 }
 
 function renderLogin(message=''){
   root.innerHTML=`<div class="login-wrap"><div class="login-card">
-    <div class="brand"><div class="brand-mark big">JI</div><div><h1>Jasvi Industries</h1><p>ERP Mobile • UAT</p></div></div>
-    <div class="login-hero"><strong>Secure ERP sign in</strong><span>Sales, purchases, inventory, finance and customer intelligence — one mobile workspace.</span></div>
+    <div class="brand login-brand"><div class="brand-mark big">JI</div><div><h1>Jasvi Industries</h1><p>Secure UAT workspace</p></div></div>
+    <div class="login-hero"><strong>Welcome back</strong><span>Sales, purchases, inventory, finance and customer intelligence — one secure mobile workspace.</span></div>
     <form id="loginForm">
-      <label class="field"><span>Server</span><input id="serverUrl" value="${esc(C.apiBaseUrl)}" readonly></label>
-      <label class="field"><span>Username or Email *</span><input id="identity" autocomplete="username" autocapitalize="none" required></label>
-      <label class="field"><span>Password *</span><input id="password" type="password" autocomplete="current-password" required></label>
-      <label class="remember"><input id="remember" type="checkbox" ${state.remember?'checked':''}> Keep me signed in on this iPhone</label>
+      <label class="field semantic-field"><span>👤 Username / Email *</span><input id="identity" autocomplete="username" autocapitalize="none" required></label>
+      <label class="field semantic-field"><span>🔒 Password *</span><input id="password" type="password" autocomplete="current-password" required></label>
+      <label class="remember"><input id="remember" type="checkbox"> Keep me signed in on this device</label>
       <div id="loginError" class="error-text">${esc(message)}</div>
-      <button class="primary" type="submit">Sign in</button>
-      <button class="secondary" type="button" id="testServer">Test UAT Server</button>
+      <button class="primary login-primary" type="submit">Sign in securely</button>
     </form>
-    <div class="login-links"><button id="forgotBtn">Forgot password?</button><button id="registerBtn">Register</button></div>
-    <p class="login-note">UAT only • ${esc(C.apiBaseUrl)} • PWA ${esc(C.version)}</p>
+    <div class="login-links"><button id="forgotBtn">Forgot password?</button><button id="serverBtn">UAT Server Settings</button></div>
+    <div class="register-row"><span>Need a Jasvi account?</span><button id="registerBtn">Register</button></div>
+    <div class="security-note">🛡 Secure UAT session • role-based permissions</div>
+    <p class="login-note">PWA ${esc(C.version)} • ${esc(C.apiBaseUrl)}</p>
   </div></div>`;
   qsel('#loginForm').onsubmit=async e=>{e.preventDefault();const err=qsel('#loginError');err.textContent='Signing in…';try{
+    const h=await api('/api/runtime/health',{auth:false});
+    if(h?.ready===false)throw new Error(h.message||'Jasvi Industries server is not ready.');
     const r=await api('/api/auth/login',{method:'POST',body:{identity:qsel('#identity').value.trim(),password:qsel('#password').value},auth:false});
     if(!r?.success)throw new Error(r?.message||'Login failed');
     if(r.mfaRequired){renderMfa(r.challengeId,r.maskedDestination,qsel('#remember').checked);return}
-    tokenStore(r.accessToken,qsel('#remember').checked);state.user=r.user||null;await bootstrap();state.route=parseHash();renderApp();loadCurrent();
+    tokenStore(r.accessToken,qsel('#remember').checked);state.user=r.user||null;await bootstrap();state.route={main:'dashboard',sub:null};location.hash='#dashboard';renderApp();loadCurrent();
   }catch(ex){err.textContent=ex.message}};
-  qsel('#testServer').onclick=async()=>{const err=qsel('#loginError');err.textContent='Testing UAT…';try{const h=await api('/api/runtime/health',{auth:false});err.textContent=`Connected • ${h.version||''} • ${h.environment||''} • ${h.databaseName||''}`;}catch(e){err.textContent=e.message}};
-  qsel('#forgotBtn').onclick=forgotPassword;qsel('#registerBtn').onclick=()=>dialog('Registration','Registration is supported by the ERP API. For UAT, use the same approved registration process as the native Mobile app.',[{label:'Close'}]);
+  qsel('#forgotBtn').onclick=passwordResetDialog;
+  qsel('#registerBtn').onclick=registrationDialog;
+  qsel('#serverBtn').onclick=()=>dialog('UAT Server Settings',`ERP server URL\n${C.apiBaseUrl}\n\nConnection settings are fixed for this UAT PWA.`,[{label:'Test Connection',run:checkHealth},{label:'Done'}]);
 }
 
-function renderMfa(challengeId,masked,remember){root.innerHTML=`<div class="login-wrap"><div class="login-card"><div class="brand"><div class="brand-mark big">✓</div><div><h1>Verify Login</h1><p>${esc(masked||'Enter your authentication code')}</p></div></div><form id="mfaForm"><label class="field"><span>One-time code *</span><input id="otp" inputmode="numeric" autocomplete="one-time-code" required></label><div id="mfaError" class="error-text"></div><button class="primary">Verify</button><button class="secondary" type="button" id="mfaBack">Back</button></form></div></div>`;
-  qsel('#mfaBack').onclick=()=>renderLogin();qsel('#mfaForm').onsubmit=async e=>{e.preventDefault();const err=qsel('#mfaError');err.textContent='Verifying…';try{const r=await api('/api/auth/login/mfa/complete',{method:'POST',body:{challengeId,otp:qsel('#otp').value.trim()},auth:false});if(!r?.success)throw new Error(r?.message||'Verification failed');tokenStore(r.accessToken,remember);state.user=r.user||null;await bootstrap();state.route=parseHash();renderApp();loadCurrent();}catch(ex){err.textContent=ex.message}};
+function renderMfa(challengeId,masked,remember){root.innerHTML=`<div class="login-wrap"><div class="login-card"><div class="brand"><div class="brand-mark big">✓</div><div><h1>Verify it’s you</h1><p>Multi-factor authentication</p></div></div><p class="mfa-copy">${esc(masked?`We sent a verification code to ${masked}`:'Enter the verification code to continue.')}</p><form id="mfaForm"><label class="field semantic-field"><span>🔐 Verification code *</span><input id="otp" inputmode="numeric" autocomplete="one-time-code" required></label><div id="mfaError" class="error-text"></div><button class="primary">Verify & Continue</button><div class="mfa-actions"><button class="link-btn" type="button" id="mfaBack">Back</button><button class="link-btn" type="button" id="mfaResend">Resend code</button></div></form></div></div>`;
+  qsel('#mfaBack').onclick=()=>renderLogin();
+  qsel('#mfaResend').onclick=async()=>{const err=qsel('#mfaError');err.textContent='Resending…';try{const r=await api('/api/auth/login/mfa/resend',{method:'POST',body:{challengeId},auth:false});if(!r?.success)throw new Error(r?.message||'Unable to resend code');challengeId=r.challengeId||challengeId;masked=r.maskedDestination||masked;err.textContent=r.message||'Verification code resent';}catch(e){err.textContent=e.message}};
+  qsel('#mfaForm').onsubmit=async e=>{e.preventDefault();const err=qsel('#mfaError');err.textContent='Verifying…';try{const r=await api('/api/auth/login/mfa/complete',{method:'POST',body:{challengeId,otp:qsel('#otp').value.trim()},auth:false});if(!r?.success)throw new Error(r?.message||'Verification failed');tokenStore(r.accessToken,remember);state.user=r.user||null;await bootstrap();state.route={main:'dashboard',sub:null};location.hash='#dashboard';renderApp();loadCurrent();}catch(ex){err.textContent=ex.message}};
 }
 
-async function forgotPassword(){formDialog('Reset Password',[{id:'identity',label:'Username or Email',required:true}],async v=>{const r=await api('/api/auth/password-reset/request',{method:'POST',body:{identity:v.identity},auth:false});dialog('Reset request',r?.message||'Password reset request submitted.',[{label:'OK'}]);});}
+function passwordResetDialog(){
+  const wrap=document.createElement('div');wrap.className='modal-backdrop';let challenge='';
+  const stage1=()=>{wrap.innerHTML=`<div class="dialog"><h2>Reset Password</h2><div class="dialog-body"><label class="field semantic-field"><span>👤 Username / Email *</span><input id="resetIdentity"></label><p>Jasvi Industries sends a verification code to the registered email.</p><div id="resetMsg" class="error-text"></div></div><div class="dialog-actions"><button class="secondary" id="resetCancel">Cancel</button><button class="primary" id="resetSend">Send Code</button></div></div>`;wrap.querySelector('#resetCancel').onclick=()=>wrap.remove();wrap.querySelector('#resetSend').onclick=async()=>{const msg=wrap.querySelector('#resetMsg');msg.textContent='Sending…';try{const r=await api('/api/auth/password-reset/request',{method:'POST',body:{identity:wrap.querySelector('#resetIdentity').value.trim()},auth:false});if(!r?.success)throw new Error(r?.message||'Unable to send code');challenge=r.challengeId;stage2(r.message);}catch(e){msg.textContent=e.message}}};
+  const stage2=(message='')=>{wrap.innerHTML=`<div class="dialog"><h2>Reset Password</h2><div class="dialog-body"><div class="info-card"><span>${esc(message||'Verification code sent.')}</span></div><label class="field"><span>Email Verification Code *</span><input id="resetOtp" inputmode="numeric"></label><label class="field"><span>Authenticator Code</span><input id="resetTotp" inputmode="numeric"></label><label class="field"><span>New Password *</span><input id="resetPass" type="password"></label><label class="field"><span>Confirm Password *</span><input id="resetConfirm" type="password"></label><div id="resetMsg" class="error-text"></div></div><div class="dialog-actions"><button class="secondary" id="resetCancel">Cancel</button><button class="primary" id="resetComplete">Reset Password</button></div></div>`;wrap.querySelector('#resetCancel').onclick=()=>wrap.remove();wrap.querySelector('#resetComplete').onclick=async()=>{const msg=wrap.querySelector('#resetMsg'),password=wrap.querySelector('#resetPass').value,confirm=wrap.querySelector('#resetConfirm').value;if(password.length<8||password!==confirm){msg.textContent='Password must be at least 8 characters and both passwords must match.';return}msg.textContent='Resetting…';try{const r=await api('/api/auth/password-reset/complete',{method:'POST',body:{challengeId:challenge,otp:wrap.querySelector('#resetOtp').value.trim(),totp:wrap.querySelector('#resetTotp').value.trim(),password},auth:false});if(!r?.success)throw new Error(r?.message||'Password reset failed');wrap.remove();renderLogin(r.message||'Password reset completed. Sign in with your new password.');}catch(e){msg.textContent=e.message}}};
+  document.body.appendChild(wrap);stage1();
+}
+
+async function registrationDialog(){
+  const wrap=document.createElement('div');wrap.className='modal-backdrop';document.body.appendChild(wrap);
+  let roles=[],captcha=null,challenge='',regId=null,username='',fullName='',email='',role='',password='',secret='';
+  try{[roles,captcha]=await Promise.all([api('/api/auth/registration-roles',{auth:false}),api('/api/auth/registration/captcha',{auth:false})]);}catch(e){wrap.remove();dialog('Registration unavailable',e.message,[{label:'Close'}]);return}
+  const one=()=>{role=role||roles?.[0]?.code||'';wrap.innerHTML=`<div class="dialog"><h2>Register Jasvi Industries User</h2><div class="dialog-body"><label class="field"><span>Username *</span><input id="regUser" value="${esc(username)}"></label><label class="field"><span>Full Name *</span><input id="regFull" value="${esc(fullName)}"></label><label class="field"><span>Email *</span><input id="regEmail" type="email" value="${esc(email)}"></label><label class="field"><span>Role *</span><select id="regRole">${(roles||[]).map(r=>`<option value="${esc(r.code)}" ${r.code===role?'selected':''}>${esc(r.displayName||r.code)}</option>`).join('')}</select></label><div class="captcha-card"><b>Security Check</b><span>${esc(captcha?.question||'')}</span><label class="field"><span>Answer *</span><input id="regCaptcha"></label><button class="link-btn" id="refreshCaptcha">Refresh CAPTCHA</button></div><p>Requires email verification, authenticator enrollment and administrator approval before first sign-in.</p><div id="regMsg" class="error-text"></div></div><div class="dialog-actions"><button class="secondary" id="regCancel">Cancel</button><button class="primary" id="regSend">Send Email Code</button></div></div>`;wrap.querySelector('#regCancel').onclick=()=>wrap.remove();wrap.querySelector('#refreshCaptcha').onclick=async()=>{captcha=await api('/api/auth/registration/captcha',{auth:false});one()};wrap.querySelector('#regSend').onclick=async()=>{const msg=wrap.querySelector('#regMsg');username=wrap.querySelector('#regUser').value.trim();fullName=wrap.querySelector('#regFull').value.trim();email=wrap.querySelector('#regEmail').value.trim();role=wrap.querySelector('#regRole').value;if(!username||!fullName||!email||!role){msg.textContent='Complete all mandatory fields.';return}msg.textContent='Sending…';try{const r=await api('/api/auth/registration/request',{method:'POST',body:{username,fullName,email,role,mfaEnabled:true,captchaChallengeId:captcha?.challengeId||'',captchaAnswer:wrap.querySelector('#regCaptcha').value.trim()},auth:false});if(!r?.success)throw new Error(r?.message||'Registration request failed');challenge=r.challengeId;two(r.message);}catch(e){msg.textContent=e.message}}};
+  const two=(message='')=>{wrap.innerHTML=`<div class="dialog"><h2>Email verification</h2><div class="dialog-body"><div class="info-card"><span>${esc(message||'Verification code sent.')}</span></div><label class="field"><span>Email Verification Code *</span><input id="regOtp" inputmode="numeric"></label><label class="field"><span>Password *</span><input id="regPass" type="password"></label><label class="field"><span>Confirm Password *</span><input id="regConfirm" type="password"></label><p>After email verification, Jasvi Industries will provide the authenticator setup secret.</p><div id="regMsg" class="error-text"></div></div><div class="dialog-actions"><button class="secondary" id="regCancel">Cancel</button><button class="primary" id="regVerify">Verify Email</button></div></div>`;wrap.querySelector('#regCancel').onclick=()=>wrap.remove();wrap.querySelector('#regVerify').onclick=async()=>{const msg=wrap.querySelector('#regMsg');password=wrap.querySelector('#regPass').value;if(password.length<8||password!==wrap.querySelector('#regConfirm').value){msg.textContent='Password must be at least 8 characters and both passwords must match.';return}msg.textContent='Verifying…';try{const r=await api('/api/auth/registration/email/verify',{method:'POST',body:{challengeId:challenge,otp:wrap.querySelector('#regOtp').value.trim(),username,password,fullName,email,role,mfaEnabled:true},auth:false});if(!r?.success||!r.registrationId)throw new Error(r?.message||'Email verification failed');regId=r.registrationId;secret=r.manualSecret||'';three(r.message);}catch(e){msg.textContent=e.message}}};
+  const three=(message='')=>{wrap.innerHTML=`<div class="dialog"><h2>Authenticator enrollment</h2><div class="dialog-body"><p>${esc(message||'Add Jasvi Industries to Google Authenticator or Microsoft Authenticator, then enter the current 6-digit code.')}</p>${secret?`<div class="info-card"><b>Manual Setup Key</b><span class="mono">${esc(secret)}</span></div>`:''}<label class="field"><span>6-digit Authenticator Code *</span><input id="regAuth" inputmode="numeric"></label><p>After verification, the account remains pending until an administrator approves it.</p><div id="regMsg" class="error-text"></div></div><div class="dialog-actions"><button class="secondary" id="regCancel">Cancel</button><button class="primary" id="regFinish">Submit Registration</button></div></div>`;wrap.querySelector('#regCancel').onclick=()=>wrap.remove();wrap.querySelector('#regFinish').onclick=async()=>{const msg=wrap.querySelector('#regMsg');msg.textContent='Submitting…';try{const r=await api('/api/auth/registration/mfa/complete',{method:'POST',body:{registrationId:regId,otp:wrap.querySelector('#regAuth').value.trim()},auth:false});if(!r?.success)throw new Error(r?.message||'Registration failed');wrap.remove();renderLogin(r.message||'Registration submitted and awaiting administrator approval.');}catch(e){msg.textContent=e.message}}};
+  one();
+}
 
 async function bootstrap(){
   const [p,perms]=await Promise.all([api('/api/profile').catch(()=>null),api('/api/auth/effective-permissions')]);
@@ -229,13 +262,17 @@ function bankHtml(){
 function importHtml(){const mode=state.more.importMode||'BANK';return `${screenHead('Data Import','Validate first, then import safely')}
   <div class="import-grid"><div>${metric('Environment','UAT','purple')}</div><div>${metric('Safety','Dry Run First','green')}</div><div>${metric('Writes','Confirmation Required','orange')}</div></div>
   <label class="field"><span>Module *</span><select id="importModule"><option ${mode==='BANK'?'selected':''}>BANK</option><option>ITEMS</option><option>CUSTOMERS</option><option>SUPPLIERS</option><option>SALES</option><option>PURCHASES</option><option>MASTER</option><option>PURCHASE_RECON</option></select></label>
-  <div class="filebox"><b>Select CSV file</b><span id="importHint">Choose the same module export/import format used by Mobile Phase 6.</span><input type="file" id="importFile" accept=".csv,text/csv"></div>
+  <div class="filebox"><b>Select CSV file</b><span id="importHint">Choose the same module export/import format used by Premium UI Phase 6.</span><input type="file" id="importFile" accept=".csv,text/csv"></div>
   <div id="importMeta">${mode==='BANK'?bankImportMeta():''}</div>
   <label class="remember"><input id="dryRun" type="checkbox" checked> Dry Run — validate only, no ERP writes</label>
   <button class="primary" id="runImport">Validate / Dry Run</button><div id="importResult"></div>`}
 function bankImportMeta(){return `<label class="field"><span>Bank Name *</span><input id="bankName"></label><label class="field"><span>Bank Account *</span><input id="bankAccount"></label><label class="field"><span>Account Holder</span><input id="bankHolder" value="Jasvi Industries"></label><label class="field"><span>Currency</span><select id="bankCurrency"><option>INR</option><option>USD</option><option>EUR</option><option>GBP</option><option>AED</option></select></label>`}
 
-function moreHtml(){if(!state.route.sub)return `${screenHead('More','All ERP modules')}<div class="more-grid">${MORE.map(x=>`<button class="more-tile" data-sub="${x.id}"><span>${icon(x.ic)}</span><b>${esc(x.label)}</b><small>${esc(x.sub)}</small></button>`).join('')}</div>`;const sub=state.route.sub;return moreSubHtml(sub);}
+function moreHtml(){
+  if(!state.route.sub){const rows=MORE.filter(x=>canOpenMore(x.id));return `<div class="more-hero"><div class="brand-mark compact hero-brand">JI</div><div><h1>Explore Jasvi Industries</h1><p>Every business module, one mobile workspace.</p></div><span class="sparkle">✦</span></div><div class="status-row"><span>SECURE</span><span>OFFLINE READY</span><span>ROLE BASED</span></div><div class="more-list">${rows.map(x=>`<button class="more-row" data-sub="${x.id}"><span class="module-icon ${x.ic}">${icon(x.ic)}</span><span class="module-copy"><b>${esc(x.label)}</b><small>${esc(x.sub)}</small></span><span class="chev">›</span></button>`).join('')}</div>`}
+  const sub=state.route.sub,item=MORE.find(x=>x.id===sub);if(!item||!canOpenMore(sub))return `<div class="permission-card"><b>🔒 No permission for ${esc(item?.label||'this module')}</b><button class="secondary" data-go="more">Back</button></div>`;
+  return `<div class="more-backbar"><button class="back-icon" data-go="more">←</button><span class="module-icon ${item.ic}">${icon(item.ic)}</span><b>${esc(item.label)}</b></div>${moreSubHtml(sub)}`;
+}
 
 function moreSubHtml(sub){
   if(sub==='purchase')return purchaseHtml();if(sub==='quotations')return quotationsHtml();if(sub==='sales-returns')return returnsHtml('SALES');if(sub==='purchase-returns')return returnsHtml('PURCHASE');if(sub==='masters')return mastersHtml();if(sub==='inventory')return inventoryHtml();if(sub==='purchase-recon')return reconHtml();if(sub==='communications')return commsHtml();if(sub==='reminders')return remindersHtml();if(sub==='notifications')return notificationsHtml();if(sub==='reports')return reportsHtml();if(sub==='profile')return profileHtml();if(sub==='admin')return adminHtml();if(sub==='import'){setTimeout(()=>go('import'),0);return loading('Opening Data Import…')}if(sub==='sync')return syncHtml();if(sub==='about')return aboutHtml();return empty('Module unavailable');
@@ -252,10 +289,10 @@ function commsHtml(){const d=state.more.comms;return `${screenHead('Communicatio
 function remindersHtml(){const d=state.more.reminders;return `${screenHead('Reminders','Open, snooze and complete follow-ups',can('REMINDERS','CREATE')?'<button class="primary small" id="newReminder">+ Reminder</button>':'')}<div class="list">${d?d.map(r=>recordCard({id:String(r.id),title:r.title,sub:r.referenceNo||r.notes,meta:`Due ${r.dueDate||''} • ${r.priority||''}${r.snoozedUntil?` • Snoozed ${r.snoozedUntil}`:''}`,status:r.status,attrs:`data-reminder="${r.id}"`})).join('')||empty('No reminders'):loading('Loading Reminders…')}</div>`}
 function notificationsHtml(){const d=state.more.notifications;return `${screenHead('Notifications','ERP alerts and record links','<button class="secondary small" id="readAll">Mark All Read</button>')}<div class="list">${d?d.map(r=>`<article class="notice-card notification ${r.read?'read':''}" data-notification="${r.id}"><b>${esc(r.title||r.category)}</b><span>${esc(r.message||'')}</span><small>${r.createdAt?new Date(r.createdAt).toLocaleString():''}</small>${badge(r.read?'READ':r.severity||'NEW')}<button class="more-btn" data-notification-actions="${r.id}">⋮ Actions</button></article>`).join('')||empty('No notifications'):loading('Loading Notifications…')}</div>`}
 function reportsHtml(){const d=state.more.reports;const f=state.more.reportFilter||{from:thirtyDaysAgo(),to:today(),type:''};return `${screenHead('Reports','Business reporting')}<div class="report-filters"><label>From<input id="reportFrom" type="date" value="${esc(f.from)}"></label><label>To<input id="reportTo" type="date" value="${esc(f.to)}"></label><button class="primary small" id="runReport">Run</button></div>${d?`<div class="metrics">${metric('Sales',rupee(d.sales),'green')}${metric('Purchase',rupee(d.purchase),'orange')}${metric('Profit',rupee(d.profit),'purple')}${metric('Receivables',rupee(d.receivables),'blue')}</div><div class="section-title"><h2>Sales</h2></div><div class="list">${(d.salesRows||[]).slice(0,50).map(r=>recordCard({id:r.number,title:r.number,sub:r.party,meta:r.date,amount:r.amount,status:r.status,actions:false})).join('')||empty('No sales report rows')}</div>`:loading('Loading Reports…')}`}
-function profileHtml(){const p=state.more.profile||state.user||{};return `${screenHead('Profile & Password','Account and security')}<div class="detail-card"><dl>${detailRows([['Username',p.username],['Full Name',p.fullName],['Email',p.email],['Role',p.role],['Department',p.department],['Branch',p.branch]])}</dl></div><div class="action-grid"><button id="editProfile">✎ Edit Profile</button><button id="changePassword">⌁ Change Password</button><button id="profileLogout">↪ Sign out</button></div><div class="info-card"><b>iPhone Security</b><span>Native Phase 7 Face ID/Touch ID quick unlock is an iOS native feature. This PWA uses the secure ERP bearer session and iPhone web storage; WebAuthn/passkey support is not available from the current server contract.</span></div>`}
+function profileHtml(){const p=state.more.profile||state.user||{};return `${screenHead('Profile & Password','Account and security')}<div class="detail-card"><dl>${detailRows([['Username',p.username],['Full Name',p.fullName],['Email',p.email],['Role',p.role],['Department',p.department],['Branch',p.branch]])}</dl></div><div class="action-grid"><button id="editProfile">✎ Edit Profile</button><button id="changePassword">⌁ Change Password</button><button id="profileLogout">↪ Sign out</button></div><div class="info-card"><b>iPhone Security</b><span>Phase 6 uses secure ERP sessions and role-based permissions. This PWA stores only the authenticated web session needed to call the UAT API.</span></div>`}
 function adminHtml(){const d=state.more.admin||{};return `${screenHead('User Access & Roles','Users, roles and permissions')}<div class="segmented"><button data-admin-tab="users" class="${(state.more.adminTab||'users')==='users'?'active':''}">Users</button><button data-admin-tab="roles" class="${state.more.adminTab==='roles'?'active':''}">Roles</button></div><div class="list">${state.more.adminTab==='roles'?(d.roles?d.roles.map(r=>recordCard({id:String(r.id),title:r.displayName||r.code,sub:r.code,meta:`${r.userCount||0} user(s) • ${r.description||''}`,status:r.active?'ACTIVE':'INACTIVE',actions:false})).join('')||empty('No roles'):loading('Loading Roles…')):(d.users?d.users.map(r=>recordCard({id:String(r.id),title:r.fullName||r.username,sub:`${r.username} • ${r.email||''}`,meta:`${r.role||''} • ${r.department||''} • ${r.lastLogin||''}`,status:r.locked?'LOCKED':r.active?'ACTIVE':'INACTIVE',attrs:`data-admin-user="${r.id}"`})).join('')||empty('No users'):loading('Loading Users…'))}</div>`}
-function syncHtml(){return `${screenHead('Sync Center','Connection and session status')}<div class="metrics">${metric('Network',state.online?'ONLINE':'OFFLINE',state.online?'green':'red')}${metric('Pending Local Sync',String(state.pending||0),'orange')}${metric('API',C.apiBaseUrl,'blue')}</div><div class="info-card"><b>Phase 7 sync behavior</b><span>The server v9.0.92 contract does not provide a durable mobile change-feed endpoint. The native app keeps an explicit local outbox for selected offline-safe updates. The PWA does not silently queue financial writes.</span></div><button class="primary" id="syncHealth">Check ERP Now</button>`}
-function aboutHtml(){return `${screenHead('About','Jasvi Industries Mobile')}<div class="detail-card"><dl>${detailRows([['PWA Version',C.version],['Environment',C.environment],['API',C.apiBaseUrl],['Phase Baseline','Phase 6 centralized data-first + Phase 7 iPhone polish'],['Production Switch','Disabled in UAT']])}</dl></div>`}
+function syncHtml(){return `${screenHead('Sync Center','Connection and session status')}<div class="metrics">${metric('Network',state.online?'ONLINE':'OFFLINE',state.online?'green':'red')}${metric('Pending Local Sync',String(state.pending||0),'orange')}${metric('API',C.apiBaseUrl,'blue')}</div><div class="info-card"><b>Phase 6 sync behavior</b><span>Phase 6 keeps offline state explicit and never hides failed financial writes. The PWA follows the same rule: cached read views may be shown, but writes are never silently queued.</span></div><button class="primary" id="syncHealth">Check ERP Now</button>`}
+function aboutHtml(){return `${screenHead('About','Jasvi Industries Mobile')}<div class="detail-card"><dl>${detailRows([['PWA Version',C.version],['Environment',C.environment],['API',C.apiBaseUrl],['Phase Baseline','Phase 6 • Centralized Data-First'],['Production Switch','Disabled in UAT']])}</dl></div>`}
 
 function detailRows(rows){return rows.filter(([,v])=>v!==undefined&&v!==null&&String(v)!=='').map(([k,v])=>`<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}
 function objDetails(title,obj,actions=[]){const rows=Object.entries(obj||{}).filter(([k,v])=>!Array.isArray(v)&&typeof v!=='object'&&v!==null&&v!=='').slice(0,40);dialog(title,`<dl class="dialog-dl">${detailRows(rows.map(([k,v])=>[k.replace(/([A-Z])/g,' $1').replace(/^./,c=>c.toUpperCase()),v]))}</dl>`,actions,true)}
@@ -291,12 +328,12 @@ async function loadMore(sub){
 function bindScreen(){
   if(state.route.main==='dashboard')bindDashboard();else if(state.route.main==='sales')bindSales();else if(state.route.main==='bank')bindBank();else if(state.route.main==='import')bindImport();else bindMore();
 }
-function bindDashboard(){qsel('#dashSearch')?.addEventListener('click',openGlobalSearch);qsel('[data-open-reminders]')?.addEventListener('click',()=>go('more','reminders'));qsa('[data-dashboard-record]').forEach(el=>el.onclick=()=>{const [m,ref]=el.dataset.dashboardRecord.split('|');openResolved(m,ref)});qsa('[data-quick]').forEach(b=>b.onclick=()=>{const k=b.dataset.quick;if(k==='new-sale')dialog('New Sale','The Phase 7 native Sale editor includes line items, GST, charges and approval controls. This PWA keeps the action visible but does not submit an incomplete document form.',[{label:'Close'}]);if(k==='purchase')go('more','purchase');if(k==='quote')go('more','quotations');if(k==='customer')go('more','masters')})}
+function bindDashboard(){qsel('#dashSearch')?.addEventListener('click',openGlobalSearch);qsel('[data-open-reminders]')?.addEventListener('click',()=>go('more','reminders'));qsa('[data-dashboard-record]').forEach(el=>el.onclick=()=>{const [m,ref]=el.dataset.dashboardRecord.split('|');openResolved(m,ref)});qsa('[data-quick]').forEach(b=>b.onclick=()=>{const k=b.dataset.quick;if(k==='new-sale')dialog('New Sale','The Phase 6 Sale editor includes line items, GST, charges and approval controls. This PWA keeps the action visible but does not submit an incomplete document form.',[{label:'Close'}]);if(k==='purchase')go('more','purchase');if(k==='quote')go('more','quotations');if(k==='customer')go('more','masters')})}
 function bindSales(){const search=()=>{state.more.salesQ=qsel('#salesQ').value.trim();loadSales().then(renderApp)};qsel('#salesQGo')?.addEventListener('click',search);qsel('#salesQ')?.addEventListener('keydown',e=>{if(e.key==='Enter')search()});qsa('[data-sales-status]').forEach(b=>b.onclick=()=>{state.more.salesStatus=b.dataset.salesStatus;loadSales().then(renderApp)});qsa('[data-sale]').forEach(el=>el.onclick=e=>{if(e.target.closest('[data-actions]'))return;openSale(el.dataset.sale)});qsa('[data-sale] [data-actions]').forEach(b=>b.onclick=e=>{e.stopPropagation();const el=b.closest('[data-sale]');openSaleActions(el.dataset.sale)});qsel('#newSale')?.addEventListener('click',()=>dialog('New Sale','New Sale remains visible, but the PWA will not write a partial/incomplete invoice. Use native Mobile/Desktop for full create until the complete web line-item editor is validated.',[{label:'Close'}]))}
 function bindBank(){qsa('[data-bank-mode]').forEach(b=>b.onclick=()=>{state.bank.mode=b.dataset.bankMode;state.bank.batch=null;state.bank.transactions=null;loadBank().then(renderApp)});qsel('#backBankBatches')?.addEventListener('click',()=>{state.bank.batch=null;state.bank.transactions=null;loadBank().then(renderApp)});const bb=()=>{state.more.bankBatchQ=qsel('#bankBatchQ')?.value.trim()||'';loadBank().then(renderApp)};qsel('#bankBatchQGo')?.addEventListener('click',bb);const bt=()=>{state.more.bankTxnQ=qsel('#bankTxnQ')?.value.trim()||'';loadBank().then(renderApp)};qsel('#bankTxnQGo')?.addEventListener('click',bt);const fq=()=>{state.more.financeQ=qsel('#financeQ')?.value.trim()||'';loadBank().then(renderApp)};qsel('#financeQGo')?.addEventListener('click',fq);qsa('[data-bank-status]').forEach(b=>b.onclick=()=>{state.more.bankStatus=b.dataset.bankStatus;loadBank().then(renderApp)});qsa('[data-bank-batch]').forEach(el=>el.onclick=()=>{state.bank.batch=(state.bank.batches?.rows||[]).find(x=>String(x.id)===el.dataset.bankBatch);loadBank().then(renderApp)});qsa('[data-bank-txn]').forEach(el=>el.onclick=e=>{if(e.target.closest('[data-actions]'))return;openBankTxn(Number(el.dataset.bankTxn))});qsa('[data-bank-txn] [data-actions]').forEach(b=>b.onclick=e=>{e.stopPropagation();openBankTxnActions(Number(b.closest('[data-bank-txn]').dataset.bankTxn))});qsa('[data-finance]').forEach(el=>el.onclick=e=>{if(e.target.closest('[data-actions]'))return;openFinance(Number(el.dataset.finance))});qsa('[data-finance] [data-actions]').forEach(b=>b.onclick=e=>{e.stopPropagation();openFinanceActions(Number(b.closest('[data-finance]').dataset.finance))})}
 function bindImport(){qsel('#importModule')?.addEventListener('change',e=>{state.more.importMode=e.target.value;renderApp()});qsel('#runImport')?.addEventListener('click',runImport)}
 function bindMore(){const sub=state.route.sub;if(!sub)return;qsa('[data-sub]').forEach(b=>b.onclick=()=>go('more',b.dataset.sub));if(sub==='purchase')bindPurchase();if(sub==='quotations')bindQuotes();if(sub.endsWith('returns'))bindReturns();if(sub==='masters')bindMasters();if(sub==='inventory')bindInventory();if(sub==='purchase-recon')bindRecon();if(sub==='communications')bindComms();if(sub==='reminders')bindReminders();if(sub==='notifications')bindNotifications();if(sub==='reports')bindReports();if(sub==='profile')bindProfile();if(sub==='admin')bindAdmin();if(sub==='sync')qsel('#syncHealth')?.addEventListener('click',checkHealth)}
-function bindPurchase(){const s=()=>{state.more.purchaseQ=qsel('#purchaseQ').value.trim();loadPurchases().then(renderApp)};qsel('#purchaseQGo')?.addEventListener('click',s);qsa('[data-purchase]').forEach(el=>el.onclick=e=>{if(e.target.closest('[data-actions]'))return;openPurchase(el.dataset.purchase)});qsa('[data-purchase] [data-actions]').forEach(b=>b.onclick=e=>{e.stopPropagation();openPurchaseActions(b.closest('[data-purchase]').dataset.purchase)});qsel('#newPurchase')?.addEventListener('click',()=>dialog('New Purchase','The complete Phase 7 Purchase editor includes line items, taxes, charges and payment controls. It remains a native/Desktop write action until the full browser editor is validated.',[{label:'Close'}]))}
+function bindPurchase(){const s=()=>{state.more.purchaseQ=qsel('#purchaseQ').value.trim();loadPurchases().then(renderApp)};qsel('#purchaseQGo')?.addEventListener('click',s);qsa('[data-purchase]').forEach(el=>el.onclick=e=>{if(e.target.closest('[data-actions]'))return;openPurchase(el.dataset.purchase)});qsa('[data-purchase] [data-actions]').forEach(b=>b.onclick=e=>{e.stopPropagation();openPurchaseActions(b.closest('[data-purchase]').dataset.purchase)});qsel('#newPurchase')?.addEventListener('click',()=>dialog('New Purchase','The Phase 6 Purchase editor includes line items, taxes, charges and payment controls. It remains a native/Desktop write action until the full browser editor is validated.',[{label:'Close'}]))}
 function bindQuotes(){const s=()=>{state.more.quoteQ=qsel('#quoteQ').value.trim();loadQuotes().then(renderApp)};qsel('#quoteQGo')?.addEventListener('click',s);qsa('[data-quote]').forEach(el=>el.onclick=e=>{if(e.target.closest('[data-actions]'))return;openQuote(Number(el.dataset.quote))});qsa('[data-quote] [data-actions]').forEach(b=>b.onclick=e=>{e.stopPropagation();openQuoteActions(Number(b.closest('[data-quote]').dataset.quote))})}
 function bindReturns(){const s=()=>{state.more.returnQ=qsel('#returnQ').value.trim();loadReturns(state.route.sub==='sales-returns'?'SALES':'PURCHASE').then(renderApp)};qsel('#returnQGo')?.addEventListener('click',s);qsa('[data-return]').forEach(el=>el.onclick=e=>{if(e.target.closest('[data-actions]'))return;openReturn(el.dataset.return,el.dataset.returnType)});qsa('[data-return] [data-actions]').forEach(b=>b.onclick=e=>{e.stopPropagation();const el=b.closest('[data-return]');openReturnActions(el.dataset.return,el.dataset.returnType)})}
 function bindMasters(){qsa('[data-master-mode]').forEach(b=>b.onclick=()=>{state.more.masterMode=b.dataset.masterMode;state.more.masterData=null;loadMore('masters').then(renderApp)});const s=()=>{state.more.masterQ=qsel('#masterQ').value.trim();renderApp()};qsel('#masterQGo')?.addEventListener('click',s);qsa('[data-party]').forEach(el=>el.onclick=()=>{const r=state.more.masterData.find(x=>String(x.id)===el.dataset.party);objDetails(r.name,r)});qsa('[data-lookup]').forEach(el=>el.onclick=()=>{const r=state.more.masterData.find(x=>String(x.id)===el.dataset.lookup);objDetails(r.value||'Lookup',r)})}
@@ -394,5 +431,5 @@ window.addEventListener('hashchange',()=>{if(!state.token)return;state.route=par
 window.addEventListener('online',()=>{state.online=true;renderApp()});window.addEventListener('offline',()=>{state.online=false;renderApp()});
 if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js').then(reg=>{reg.update();reg.addEventListener('updatefound',()=>{const w=reg.installing;w?.addEventListener('statechange',()=>{if(w.state==='installed'&&navigator.serviceWorker.controller)toast('New PWA version installed. Reopen the app to use it.')})})}).catch(()=>{})}
 
-(async()=>{state.route=parseHash();if(state.token){try{await bootstrap();renderApp();await loadCurrent();renderApp()}catch(e){tokenStore('',false);renderLogin(e.message)}}else renderLogin()})();
+(async()=>{state.route=parseHash();renderStartup();try{const h=await api('/api/runtime/health',{auth:false});state.online=!!h?.ready;setTimeout(()=>{if(state.token){bootstrap().then(async()=>{renderApp();await loadCurrent();renderApp()}).catch(e=>{tokenStore('',false);renderLogin(e.message)})}else renderLogin(h?.ready===false?(h.message||'Server is not ready'):'')},350)}catch(e){state.online=false;setTimeout(()=>renderLogin(e.message),350)}})();
 })();

@@ -1,8 +1,10 @@
 window.JASVI_PWA_CONFIG = Object.freeze({
   appName: 'Jasvi Industries',
   environment: 'UAT',
-  version: '1.1.0-uat-phase7-parity',
+  version: '1.2.0-uat-phase6',
   apiBaseUrl: 'https://api-uat.jasviindustries.in',
+  serverBaseline: '9.0.92',
+  expectedApiRevision: 'spring-security-bearer-v5',
   publicUrl: 'https://mobile-uat.jasviindustries.in',
   prodPublicUrl: 'https://mobile.jasviindustries.in',
   prodApiBaseUrl: 'https://api.jasviindustries.in',
